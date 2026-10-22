@@ -6,7 +6,11 @@
 import * as T from './logic';
 import type { EnrichedEntry, Exercise, ExerciseStats, State, Streaks } from './types';
 import type { SnapshotInfo } from './store';
-import { PLAN, CONFIG, colorOf, tracksTime } from './config';
+import type { SyncView } from './sync';
+import { PLAN, CONFIG, CLOUD, colorOf, tracksTime } from './config';
+
+const CONFIG_REMINDER_HOURS = CLOUD.reminderHours;
+const CONFIG_DEFAULT_HOUR = CLOUD.defaultReminderHour;
 import { esc, fmt, amount, longDate, shortDate, paceLabel, durationLabel } from './format';
 import { dot, chip, field, textInput, select, card, statGrid, listRows, button, banner } from './html';
 
@@ -29,8 +33,15 @@ export interface UiState {
 
 export type Theme = 'light' | 'dark' | 'auto';
 
+export interface ReminderInfo {
+  supported: boolean;
+  hour: number | null; // null when off
+}
+
 export interface ViewCtx {
   theme: Theme;
+  sync: SyncView;
+  reminder: ReminderInfo;
   state: State;
   ui: UiState;
   en: EnrichedEntry[];
@@ -90,6 +101,7 @@ export function viewToday(ctx: ViewCtx): string {
 
   return [
     installBanner(ctx.install),
+    syncBanner(ctx.sync),
     streakBanner(streak, ctx.now),
     backupBanner(state, ctx.now),
     doneBanner(
@@ -183,6 +195,11 @@ function installBanner({ standalone, dismissed }: InstallInfo): string {
     `Install this as an app on your home screen. ${quietButton('How', 'tab', { tab: 'more' })} ${quietButton('x', 'dismissInstall', {}, 'dismiss')}`,
     'ok',
   );
+}
+
+function syncBanner(sync: SyncView): string {
+  if (sync.status !== 'conflict') return '';
+  return banner(`Cloud sync needs a decision. ${quietButton('Review', 'tab', { tab: 'more' })}`);
 }
 
 /** Evening nudge when a running streak would break at midnight. */
@@ -344,6 +361,7 @@ export function viewMore(ctx: ViewCtx): string {
   const last = state.settings.lastBackup;
   return [
     installCard(ctx.install),
+    syncCard(ctx.sync, ctx.reminder),
     '<h2 style="font-size:1.3rem">Backup</h2>',
     '<p class="muted">Your data lives only on this device. Export a copy now and then, especially before clearing browser data or changing phones.</p>',
     card(`<p class="small muted">Last backup: ${last ? new Date(last).toLocaleString() : 'never'}</p>
@@ -386,6 +404,40 @@ function startingNumbersCard(state: State): string {
     <p class="small muted">Fix what you entered at setup. Use - for behind. These sit underneath everything you log in the app.</p>
     <div id="startForm">${rows}</div>
     <div style="margin-top:12px">${button('Save starting numbers', 'saveStart', { cls: 'primary' })}</div>`);
+}
+
+function ago(ts: number | null, now = Date.now()): string {
+  if (!ts) return 'never';
+  const mins = Math.round((now - ts) / 60000);
+  return mins < 1 ? 'just now' : mins < 60 ? `${mins} min ago` : `${Math.round(mins / 60)} h ago`;
+}
+
+function syncCard(sync: SyncView, reminder: ReminderInfo): string {
+  const intro = '<h2>Cloud sync</h2>';
+  if (sync.status === 'signedOut') {
+    return card(`${intro}<p class="small muted">Keeps your data safe off this phone and in step across devices. One account, your email and a password.</p>
+      <div id="authForm">${field('Email', '<input type="text" data-f="email" inputmode="email" autocomplete="username" autocapitalize="none">')}
+      ${field('Password (8+ characters)', '<input type="password" data-f="password" autocomplete="current-password">')}</div>
+      ${sync.message ? `<p class="small" style="color:var(--bad)">${esc(sync.message)}</p>` : ''}
+      <div class="two" style="margin-top:12px">${button('Sign in', 'signIn', { cls: 'primary' })}${button('Create account', 'signUp')}</div>`);
+  }
+  if (sync.status === 'conflict' && sync.conflict) {
+    return card(`${intro}<div class="banner">Both this phone (${sync.conflict.phoneSessions} sessions) and the cloud (${sync.conflict.cloudSessions} sessions) have changes.</div>
+      <p class="small muted">Pick the one to keep. The other is saved as an automatic snapshot first, so nothing is lost.</p>
+      <div class="two">${button('Keep this phone', 'useLocal', { cls: 'primary' })}${button('Use the cloud copy', 'useCloud')}</div>`);
+  }
+  const state =
+    sync.status === 'syncing' ? 'Syncing...' : sync.status === 'error' ? `Problem: ${esc(sync.message)}` : `Synced ${ago(sync.lastSynced)}`;
+  const reminders = !reminder.supported
+    ? '<p class="small muted">Reminders need a browser that supports notifications.</p>'
+    : reminder.hour === null
+      ? `<p class="small muted">Get a nudge in the evening if you have not logged anything today.</p>
+         ${field('Remind me at', select('remindHour', CONFIG_REMINDER_HOURS.map((h) => ({ value: h, label: `${h}:00` })), CONFIG_DEFAULT_HOUR))}
+         <div style="margin-top:10px">${button('Turn on reminders', 'enableReminders')}</div>`
+      : `<p class="small">Reminder is on, daily at ${reminder.hour}:00 if nothing is logged.</p>${button('Turn off reminders', 'disableReminders')}`;
+  return card(`${intro}<p class="small">Signed in as <b>${esc(sync.email ?? '')}</b></p><p class="small muted">${state}</p>
+    <div class="two">${button('Sync now', 'syncNow', { cls: 'primary' })}${button('Sign out', 'signOut')}</div>
+    <h3 style="margin:18px 0 6px;font-size:1rem">Daily reminder</h3>${reminders}`);
 }
 
 function themeCard(theme: Theme): string {

@@ -60,7 +60,7 @@ button{font:inherit;cursor:pointer}
 .list>div:first-child{border-top:0}
 details{margin-top:6px} summary{cursor:pointer;color:var(--muted);font-weight:700;padding:6px 0}
 label{display:block;font-size:.85rem;color:var(--muted);margin:10px 0 4px;font-weight:700}
-input[type=text],input[type=number],input[type=date],select,textarea{width:100%;padding:11px 12px;border-radius:12px;
+input[type=text],input[type=password],input[type=number],input[type=date],select,textarea{width:100%;padding:11px 12px;border-radius:12px;
   border:2px solid var(--line);background:var(--card);color:var(--ink);font:inherit}
 .hero input[type=text],.hero input[type=date],.hero select{background:rgba(255,255,255,.7);border-color:transparent;color:var(--btn-ink)}
 input:focus,select:focus,textarea:focus{outline:0;border-color:var(--hot)}

@@ -28,3 +28,31 @@ self.addEventListener('fetch', (event) => {
       .catch(() => caches.match(request).then((hit) => hit || caches.match('/index.html') || caches.match('/'))),
   );
 });
+
+// Daily reminder pushed by the cloud function.
+self.addEventListener('push', (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch {
+    /* plain text payload */
+  }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'Workout Tracker', {
+      body: data.body || 'Nothing logged yet today.',
+      icon: '/icon-192.png',
+      badge: '/icon-192.png',
+      tag: 'wt-daily',
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((list) => {
+      const open = list.find((c) => 'focus' in c);
+      return open ? open.focus() : self.clients.openWindow('/');
+    }),
+  );
+});

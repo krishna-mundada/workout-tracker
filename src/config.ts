@@ -47,3 +47,17 @@ export const CONFIG = {
 export const tracksTime = (name: string): boolean => PLAN.find((p) => p.name === name)?.tracksTime === true;
 
 export const colorOf = (name: string): string => PLAN.find((p) => p.name === name)?.color ?? CONFIG.fallbackColor;
+
+/** Public values only (the publishable key is safe in the browser; row-level security guards the data). */
+export const CLOUD = {
+  url: 'https://jkqfmeiuwlhtvelxllfu.supabase.co',
+  publishableKey: 'sb_publishable_SLkrLcFMbTvxfShg2mrGDg_EcTvqY0P',
+  vapidPublicKey: 'BLLSB4yxKbdVcNqEnPi8pJd9vebDebbTzPDV1Y44MO3VowE70_49SWaIhoZaVqFJH6mO7lZYXmTixlzCO1bdvAk',
+  dirtyKey: 'wt-sync-dirty',
+  remoteTsKey: 'wt-sync-remote-ts',
+  lastSyncKey: 'wt-sync-last',
+  remindHourKey: 'wt-remind-hour',
+  pushDelayMs: 1500, // wait this long after a change before uploading
+  reminderHours: [17, 18, 19, 20, 21],
+  defaultReminderHour: 19,
+};

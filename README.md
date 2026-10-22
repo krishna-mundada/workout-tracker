@@ -26,6 +26,9 @@ Pushing to `master` redeploys on Vercel (framework preset: Vite, output `dist`).
 | `src/store.ts` | Persistence, undo snapshots, import and export. Storage is injected so tests use a fake. |
 | `src/views.ts` | Screens as pure functions returning HTML. |
 | `src/html.ts`, `src/format.ts` | Small markup and formatting helpers shared by the views. |
+| `src/sync.ts` | Cloud sync (Supabase). `planSync` is the pure decision logic and is unit tested. |
+| `src/push.ts` | Web Push subscription for the daily reminder. |
+| `supabase/functions/wt-remind/` | Hourly reminder function. Deployed copy lives in the Supabase project; redeploy after editing. |
 | `src/dom.ts` | Form reading, toast, modal, download. |
 | `src/app.ts` | Wiring: state, rendering, the `actions` map (`data-act="name"`), events. |
 | `src/styles.css` | Theme variables at the top; per-exercise colours come from `PLAN`. |
@@ -45,3 +48,9 @@ iPhone: open the site in Safari, Share, Add to Home Screen. Android: Chrome menu
 ## Backups
 
 Data is per browser. Use Backup > Download file or Copy as text now and then. The app also keeps the last few states automatically (Backup > Automatic snapshots).
+
+## Cloud (Supabase, kancess project)
+
+Tables, all prefixed `wt_`: `wt_state` (one JSON document per user), `wt_push_subscriptions`, `wt_config` (VAPID private key, no client access). Row-level security allows only the owner's email. An hourly pg_cron job calls the `wt-remind` edge function. Sync is last-write-wins with a prompt when both sides changed; the phone copy always works offline.
+
+Public values (project URL, publishable key, VAPID public key) are in `CLOUD` in `src/config.ts`.

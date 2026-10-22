@@ -1,9 +1,11 @@
 // Entry point: wires the store, the views and the DOM. Rules live in logic.ts, markup in views.ts.
-import { CONFIG, PLAN } from './config';
+import { CLOUD, CONFIG, PLAN } from './config';
 import { $, $$, buzz, closeModal, download, must, openModal, readForm, readRows, text, toast } from './dom';
 import { fmt } from './format';
 import * as T from './logic';
+import { disableReminders, enableReminders, pushSupported } from './push';
 import { createStore } from './store';
+import { createSync } from './sync';
 import type { OnboardingRow } from './types';
 import { entryForm, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
 import './styles.css';
@@ -26,6 +28,8 @@ const store = createStore({
   onError: (message) => toast(message),
 });
 
+const sync = createSync({ store, config: { ...CLOUD, url: CLOUD.url, publishableKey: CLOUD.publishableKey }, onChange: () => render() });
+
 const ui: UiState = { tab: 'today', override: null, optOpen: false, histAll: false };
 let installPrompt: InstallPromptEvent | null = null;
 
@@ -47,6 +51,11 @@ const isStandalone = (): boolean =>
   window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 const isIOS = (): boolean => /iphone|ipad|ipod/i.test(navigator.userAgent);
 
+const reminderHour = (): number | null => {
+  const v = store.getFlag(CLOUD.remindHourKey);
+  return v === null || v === '' ? null : Number(v);
+};
+
 // ---------- rendering ----------
 
 const TABS: Record<UiState['tab'], (ctx: ViewCtx) => string> = {
@@ -60,6 +69,8 @@ function context(): ViewCtx {
   const today = T.todayISO();
   return {
     theme: savedTheme(),
+    sync: sync.view(),
+    reminder: { supported: pushSupported(), hour: reminderHour() },
     state: store.state,
     ui,
     en: T.enrich(store.state),
@@ -113,6 +124,14 @@ function importFrom(text: string): void {
   if (!confirmed('Replace current data with this backup?')) return;
   store.importJSON(text);
   toast('Backup imported.');
+}
+
+async function authenticate(kind: 'signIn' | 'signUp'): Promise<void> {
+  const form = readForm(must('#authForm'));
+  const email = text(form, 'email');
+  const password = text(form, 'password');
+  if (!email.includes('@') || password.length < 8) throw new Error('Enter your email and a password of 8 or more characters.');
+  await (kind === 'signIn' ? sync.signIn(email, password) : sync.signUp(email, password));
 }
 
 // ---------- actions (data-act="name") ----------
@@ -221,6 +240,27 @@ const actions: Record<string, Action> = {
     await event.prompt();
     render();
   },
+  signIn: () => authenticate('signIn'),
+  signUp: () => authenticate('signUp'),
+  signOut: () => sync.signOut(),
+  syncNow: () => sync.syncNow(),
+  useCloud: () => sync.resolve('cloud'),
+  useLocal: () => sync.resolve('phone'),
+  enableReminders: async () => {
+    const userId = sync.userId();
+    if (!userId) throw new Error('Sign in first.');
+    const hour = Number(text(readForm(must('#app')), 'remindHour')) || CLOUD.defaultReminderHour;
+    await enableReminders(sync.client(), userId, CLOUD.vapidPublicKey, hour);
+    store.setFlag(CLOUD.remindHourKey, String(hour));
+    toast(`Reminder set for ${hour}:00.`);
+    render();
+  },
+  disableReminders: async () => {
+    await disableReminders(sync.client());
+    store.setFlag(CLOUD.remindHourKey, '');
+    toast('Reminders off.');
+    render();
+  },
   theme: (el) => {
     const theme = THEMES.find((t) => t === el.dataset.theme) ?? 'light';
     store.setFlag(CONFIG.themeKey, theme);
@@ -323,3 +363,4 @@ if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
 render();
+void sync.init();

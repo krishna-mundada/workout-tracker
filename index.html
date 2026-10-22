@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#101312">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Workouts">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>Workout Tracker</title>
+<style>
+:root{
+  --bg:#f4f3ee; --card:#ffffff; --ink:#171a19; --muted:#666b68; --line:#e4e2da;
+  --accent:#1b7a49; --accent-ink:#ffffff; --warn:#b4531a; --soft:#e8f2ec; --softwarn:#f8ece3;
+}
+@media (prefers-color-scheme:dark){
+  :root{
+    --bg:#101312; --card:#181c1b; --ink:#eef0ec; --muted:#8e9591; --line:#2a2f2d;
+    --accent:#7bd88f; --accent-ink:#0c1a10; --warn:#f0a35e; --soft:#1c2a21; --softwarn:#2d2217;
+  }
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;background:var(--bg);color:var(--ink);
+  font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+body{padding-top:env(safe-area-inset-top)}
+main{max-width:520px;margin:0 auto;padding:16px 16px 110px}
+h1,h2,h3{margin:0;font-weight:700;letter-spacing:-.01em}
+h2{font-size:1.05rem;margin-bottom:10px}
+p{margin:0 0 10px}
+.muted{color:var(--muted)} .small{font-size:.85rem}
+.num{font-variant-numeric:tabular-nums}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:16px;margin-bottom:14px}
+.hero{padding:22px 18px 18px}
+.eyebrow{font-size:.78rem;text-transform:uppercase;letter-spacing:.09em;color:var(--muted);font-weight:600}
+.hero h1{font-size:1.5rem;margin:4px 0 0}
+.target{display:flex;align-items:baseline;gap:8px;margin:6px 0 4px}
+.target b{font-size:4.6rem;line-height:1;font-weight:800;letter-spacing:-.04em;font-variant-numeric:tabular-nums}
+.target span{font-size:1.1rem;color:var(--muted)}
+.chip{display:inline-block;padding:2px 9px;border-radius:99px;font-size:.8rem;font-weight:700;
+  background:var(--soft);color:var(--accent);font-variant-numeric:tabular-nums}
+.chip.neg{background:var(--softwarn);color:var(--warn)}
+.chip.zero{background:var(--line);color:var(--muted)}
+.stepper{display:flex;gap:10px;margin:16px 0 12px}
+.stepper input{flex:1;min-width:0;text-align:center;font:700 1.8rem system-ui;padding:10px;border-radius:14px;
+  border:1px solid var(--line);background:var(--bg);color:var(--ink);font-variant-numeric:tabular-nums}
+button{font:inherit;cursor:pointer}
+.sq{width:64px;border-radius:14px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font-size:1.7rem;font-weight:700}
+.primary{width:100%;padding:15px;border:0;border-radius:14px;background:var(--accent);color:var(--accent-ink);
+  font-size:1.08rem;font-weight:700}
+.primary:active{transform:scale(.99)}
+.ghost{padding:9px 14px;border-radius:12px;border:1px solid var(--line);background:transparent;color:var(--ink);font-weight:600}
+.ghost.danger{color:var(--warn)}
+.row{display:flex;gap:10px;align-items:center;justify-content:space-between}
+.grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;text-align:center}
+.grid3 b{display:block;font-size:1.7rem;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.grid3 span{font-size:.78rem;color:var(--muted)}
+.list>div{display:flex;justify-content:space-between;align-items:center;padding:9px 0;border-top:1px solid var(--line)}
+.list>div:first-child{border-top:0}
+details{margin-top:6px} summary{cursor:pointer;color:var(--muted);font-weight:600;padding:6px 0}
+label{display:block;font-size:.85rem;color:var(--muted);margin:10px 0 4px;font-weight:600}
+input[type=text],input[type=number],input[type=date],select,textarea{width:100%;padding:11px 12px;border-radius:12px;
+  border:1px solid var(--line);background:var(--bg);color:var(--ink);font:inherit}
+input[type=checkbox],input[type=radio]{width:auto;margin-right:8px;accent-color:var(--accent)}
+.check{display:flex;align-items:center;color:var(--ink);font-size:.95rem;font-weight:500;margin:12px 0 0}
+.banner{padding:10px 14px;border-radius:14px;background:var(--softwarn);color:var(--warn);font-size:.9rem;margin-bottom:14px;font-weight:600}
+.banner.ok{background:var(--soft);color:var(--accent)}
+.banner button{margin-left:6px;padding:3px 10px;border-radius:99px;border:1px solid currentColor;background:transparent;color:inherit;font-weight:700}
+nav{position:fixed;left:0;right:0;bottom:0;display:flex;justify-content:center;
+  padding:8px 12px calc(8px + env(safe-area-inset-bottom));background:color-mix(in srgb,var(--bg) 88%,transparent);
+  backdrop-filter:blur(12px);border-top:1px solid var(--line);z-index:5}
+nav .in{display:flex;gap:6px;width:100%;max-width:520px}
+nav button{flex:1;border:0;background:transparent;color:var(--muted);padding:10px 4px;border-radius:12px;font-weight:700;font-size:.9rem}
+nav button.on{background:var(--soft);color:var(--accent)}
+nav[hidden]{display:none}
+.hist-day{font-size:.78rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);font-weight:700;margin:16px 4px 6px}
+.hist-row{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:12px 14px;background:var(--card);
+  border:1px solid var(--line);border-radius:14px;margin-bottom:6px;width:100%;text-align:left;color:var(--ink)}
+.heat{display:grid;grid-auto-flow:column;grid-template-rows:repeat(7,1fr);gap:4px}
+.cell{aspect-ratio:1;border-radius:4px;background:var(--line)}
+.cell.on{background:var(--accent)} .cell.future{background:transparent}
+svg{display:block;width:100%;height:auto;overflow:visible}
+.ax{fill:var(--muted);font-size:10px} .gl{stroke:var(--line);stroke-width:1}
+.la{fill:none;stroke:var(--accent);stroke-width:2.4;stroke-linejoin:round;stroke-linecap:round}
+.lt{fill:none;stroke:var(--muted);stroke-width:1.6;stroke-dasharray:4 4}
+.dot{fill:var(--accent)}
+#toast{position:fixed;left:50%;bottom:calc(86px + env(safe-area-inset-bottom));transform:translate(-50%,20px);opacity:0;
+  pointer-events:none;background:var(--ink);color:var(--bg);padding:11px 16px;border-radius:14px;font-weight:600;
+  display:flex;gap:12px;align-items:center;max-width:92vw;transition:.2s;z-index:20}
+#toast.show{opacity:1;transform:translate(-50%,0);pointer-events:auto}
+#toast button{border:0;background:transparent;color:var(--accent-ink);background:var(--accent);padding:4px 12px;border-radius:99px;font-weight:700}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.45);display:none;align-items:flex-end;justify-content:center;z-index:30}
+#modal.open{display:flex}
+.sheet{background:var(--card);width:100%;max-width:520px;border-radius:22px 22px 0 0;padding:20px 18px calc(22px + env(safe-area-inset-bottom));
+  max-height:90vh;overflow:auto}
+.sheet .btns{display:flex;gap:10px;margin-top:18px}
+.sheet .btns>*{flex:1}
+textarea{min-height:140px;font:12px ui-monospace,monospace}
+.ob-row{border-top:1px solid var(--line);padding:12px 0}
+.ob-row:first-of-type{border-top:0}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+</style>
+</head>
+<body>
+<main id="app"></main>
+<nav id="tabs" hidden><div class="in">
+  <button data-act="tab" data-tab="today">Today</button>
+  <button data-act="tab" data-tab="history">History</button>
+  <button data-act="tab" data-tab="progress">Progress</button>
+  <button data-act="tab" data-tab="more">Backup</button>
+</div></nav>
+<div id="toast" role="status"></div>
+<div id="modal"></div>
+<script src="logic.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -34,6 +34,18 @@ const pad = (n: number): string => String(n).padStart(2, '0');
 export function toNumber(v: unknown): number {
   return typeof v === 'number' ? v : parseFloat(String(v).replace(',', '.').replace(/[\u2212\u2013]/g, '-'));
 }
+/** Minutes from "28.5", "28,5" or "28:30" (mm:ss). NaN when not a time. */
+export function toMinutes(v: unknown): number {
+  const str = String(v).trim();
+  const m = /^(\d+):([0-5]?\d)$/.exec(str);
+  return m ? Number(m[1]) + Number(m[2]) / 60 : toNumber(str);
+}
+function optionalMinutes(v: unknown): number | undefined {
+  if (v === undefined || v === null || String(v).trim() === '') return undefined;
+  const n = toMinutes(v);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('Time must be like 28:30 or 28.5 minutes.');
+  return r(n);
+}
 function requireNumber(v: unknown, label: string): number {
   const n = toNumber(v);
   if (!Number.isFinite(n)) throw new Error(`${label} must be a number.`);
@@ -111,6 +123,7 @@ export function migrate(obj: any): State {
       note: l.note ? String(l.note) : '',
       ts: l.ts || 0,
       ...(Array.isArray(l.sets) && l.sets.length > 1 ? { sets: l.sets.map(Number) } : {}),
+      ...(Number(l.minutes) > 0 ? { minutes: Number(l.minutes) } : {}),
     });
   }
 
@@ -182,6 +195,49 @@ export function exerciseStats(state: State, ex: Exercise, enriched: EnrichedEntr
 }
 
 /** Which exercise is next in the rotation. */
+// ---------- period totals and pace ----------
+
+export interface PeriodTotals {
+  week: number;
+  lastWeek: number;
+  month: number;
+}
+
+/** Totals for one exercise: this week (Mon-Sun), last week, and this calendar month. Opening balance excluded. */
+export function periodTotals(entries: LogEntry[], exId: number, today: string): PeriodTotals {
+  const weekStart = addDays(today, -((parseISO(today).getDay() + 6) % 7));
+  const lastWeekStart = addDays(weekStart, -7);
+  const monthStart = `${today.slice(0, 8)}01`;
+  const out: PeriodTotals = { week: 0, lastWeek: 0, month: 0 };
+  for (const e of entries) {
+    if (e.exId !== exId || e.date > today) continue;
+    if (e.date >= weekStart) out.week += e.actual;
+    else if (e.date >= lastWeekStart) out.lastWeek += e.actual;
+    if (e.date >= monthStart) out.month += e.actual;
+  }
+  return { week: r(out.week), lastWeek: r(out.lastWeek), month: r(out.month) };
+}
+
+/** Minutes per unit for one session, or null when no time was recorded. */
+export const paceOf = (e: Pick<LogEntry, 'actual' | 'minutes'>): number | null => (e.minutes && e.actual > 0 ? e.minutes / e.actual : null);
+
+export interface PaceStats {
+  avg: number;
+  best: number;
+  last: number;
+  timed: number;
+}
+
+/** Pace summary over the entries that have a time, or null when none do. */
+export function paceStats(entries: LogEntry[]): PaceStats | null {
+  const timed = entries.filter((e) => paceOf(e) !== null);
+  if (!timed.length) return null;
+  const paces = timed.map((e) => paceOf(e) as number);
+  const minutes = timed.reduce((a, e) => a + (e.minutes ?? 0), 0);
+  const distance = timed.reduce((a, e) => a + e.actual, 0);
+  return { avg: minutes / distance, best: Math.min(...paces), last: paces[paces.length - 1] as number, timed: timed.length };
+}
+
 export function nextExercise(state: State): Exercise | null {
   const active = activeList(state);
   if (!active.length) return null;
@@ -361,9 +417,10 @@ export interface SessionInput {
   date?: string;
   advance?: boolean;
   note?: string;
+  minutes?: number | string;
 }
 
-export function logSession(state: State, { exId, actual, date, advance, note }: SessionInput): LogEntry {
+export function logSession(state: State, { exId, actual, date, advance, note, minutes }: SessionInput): LogEntry {
   const ex = getEx(state, exId);
   if (!ex) throw new Error('Exercise not found.');
   const amount = requireNumber(actual, 'Amount');
@@ -380,6 +437,8 @@ export function logSession(state: State, { exId, actual, date, advance, note }: 
     note: note ? String(note).slice(0, 200) : '',
     ts: Date.now(),
   };
+  const mins = optionalMinutes(minutes);
+  if (mins !== undefined) entry.minutes = mins;
   state.log.push(entry);
   return entry;
 }
@@ -414,16 +473,16 @@ export function discardSets(state: State): void {
 }
 
 /** Turn the sets in progress into one logged session (the sum of the sets). */
-export function finishSession(state: State, { date, advance, note }: { date?: string; advance?: boolean; note?: string } = {}): LogEntry {
+export function finishSession(state: State, { date, advance, note, minutes }: { date?: string; advance?: boolean; note?: string; minutes?: number | string } = {}): LogEntry {
   const p = state.pending;
   if (!p) throw new Error('No sets to finish.');
-  const entry = logSession(state, { exId: p.exId, actual: pendingTotal(state), date: date || p.date, advance, note });
+  const entry = logSession(state, { exId: p.exId, actual: pendingTotal(state), date: date || p.date, advance, note, minutes });
   if (p.sets.length > 1) entry.sets = [...p.sets];
   state.pending = null;
   return entry;
 }
 
-export function editEntry(state: State, id: number, patch: Partial<Pick<SessionInput, 'actual' | 'date' | 'advance' | 'note'>>): LogEntry {
+export function editEntry(state: State, id: number, patch: Partial<Pick<SessionInput, 'actual' | 'date' | 'advance' | 'note' | 'minutes'>>): LogEntry {
   const entry = state.log.find((l) => l.id === id);
   if (!entry) throw new Error('Entry not found.');
   if (patch.actual !== undefined) {
@@ -437,6 +496,11 @@ export function editEntry(state: State, id: number, patch: Partial<Pick<SessionI
   }
   if (patch.advance !== undefined) entry.advance = Boolean(patch.advance);
   if (patch.note !== undefined) entry.note = String(patch.note).slice(0, 200);
+  if (patch.minutes !== undefined) {
+    const mins = optionalMinutes(patch.minutes);
+    if (mins === undefined) delete entry.minutes;
+    else entry.minutes = mins;
+  }
   return entry;
 }
 

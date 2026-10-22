@@ -114,3 +114,18 @@ textarea{min-height:140px;font:12px ui-monospace,monospace}
 .wide{width:100%;margin-top:10px;padding:13px}
 .hero .ghost{border-color:rgba(20,8,46,.35);color:var(--btn-ink)}
 .link{display:block;margin:10px auto 0;border:0;background:transparent;color:rgba(20,8,46,.7);font-weight:700;text-decoration:underline}
+
+.two3{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.two3 button{padding:11px 4px}
+
+/* dark theme: opt-in via the Appearance card, or "match phone" */
+:root[data-theme=dark]{
+  --bg:#0b0a1a; --card:#17143a; --ink:#ffffff; --muted:#aca7e3; --line:#2e2a66; --soft:#262063;
+  --good:#3df5a0; --goodbg:#0d3b2c; --bad:#ff9a5c; --badbg:#47210f;
+}
+@media (prefers-color-scheme:dark){
+  :root[data-theme=auto]{
+    --bg:#0b0a1a; --card:#17143a; --ink:#ffffff; --muted:#aca7e3; --line:#2e2a66; --soft:#262063;
+    --good:#3df5a0; --goodbg:#0d3b2c; --bad:#ff9a5c; --badbg:#47210f;
+  }
+}

@@ -215,3 +215,39 @@ describe('sets in batches', () => {
     expect(entry.actual).toBe(12);
   });
 });
+
+describe('run time, pace and period totals', () => {
+  it('parses times and computes pace', () => {
+    expect(T.toMinutes('28:30')).toBe(28.5);
+    expect(T.toMinutes('28,5')).toBe(28.5);
+    const s = fresh();
+    const run = s.exercises[3]!;
+    T.logSession(s, { exId: run.id, date: '2026-10-01', actual: 5, minutes: '25:00' });
+    T.logSession(s, { exId: run.id, date: '2026-10-02', actual: 4, minutes: '22:00' });
+    T.logSession(s, { exId: run.id, date: '2026-10-03', actual: 3 });
+    const stats = T.paceStats(T.enrich(s).filter((e) => e.exId === run.id))!;
+    expect(stats.timed).toBe(2);
+    expect(stats.best).toBe(5); // 25/5
+    expect(stats.last).toBe(5.5); // 22/4
+    expect(stats.avg).toBeCloseTo(47 / 9);
+    expect(() => T.logSession(s, { exId: run.id, actual: 1, minutes: 'fast' })).toThrow();
+  });
+
+  it('keeps and clears minutes through edits and backups', () => {
+    const s = fresh();
+    const e = T.logSession(s, { exId: s.exercises[3]!.id, date: '2026-10-01', actual: 2, minutes: 12 });
+    expect(T.migrate(JSON.parse(JSON.stringify(s))).log[0]!.minutes).toBe(12);
+    T.editEntry(s, e.id, { minutes: '' });
+    expect(s.log[0]!.minutes).toBeUndefined();
+  });
+
+  it('totals this week (Mon-Sun), last week and this month', () => {
+    const s = fresh();
+    const id = s.exercises[0]!.id;
+    // 2026-10-22 is a Thursday: week starts Mon 10-19, last week starts 10-12
+    for (const [d, n] of [['2026-10-22', 10], ['2026-10-19', 5], ['2026-10-18', 7], ['2026-10-12', 3], ['2026-10-02', 4], ['2026-09-30', 9]] as const) {
+      T.logSession(s, { exId: id, date: d, actual: n });
+    }
+    expect(T.periodTotals(s.log, id, '2026-10-22')).toEqual({ week: 15, lastWeek: 10, month: 29 });
+  });
+});

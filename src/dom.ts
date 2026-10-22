@@ -67,3 +67,12 @@ export function download(filename: string, content: string): void {
   link.remove();
   setTimeout(() => URL.revokeObjectURL(link.href), 2000);
 }
+
+/** Short tap feedback where the device supports it. */
+export const buzz = (ms = 15): void => {
+  try {
+    navigator.vibrate?.(ms);
+  } catch {
+    /* not supported */
+  }
+};

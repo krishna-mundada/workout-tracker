@@ -29,6 +29,8 @@ export interface LogEntry {
   ts: number;
   /** The individual sets, when the session was logged in batches. */
   sets?: number[];
+  /** Duration in minutes, for exercises that track time (runs). */
+  minutes?: number;
 }
 
 export interface Settings {

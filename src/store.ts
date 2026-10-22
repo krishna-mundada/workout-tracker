@@ -23,11 +23,14 @@ export interface StoreOptions {
 export interface SnapshotInfo {
   ts: number;
   entries: number;
+  /** What was about to change when this copy was taken. */
+  label: string;
 }
 
 interface RawSnapshot {
   ts: number;
   data: string;
+  label?: string;
 }
 
 export type Store = ReturnType<typeof createStore>;
@@ -76,14 +79,14 @@ export function createStore({ storage, config, now = Date.now, onError = () => {
       return [];
     }
   }
-  function takeSnapshot() {
+  function takeSnapshot(label?: string) {
     if (!state.exercises.length) return; // nothing worth restoring yet
-    const list = [{ ts: now(), data: JSON.stringify(state) }, ...rawSnapshots()].slice(0, config.maxSnapshots);
+    const list = [{ ts: now(), data: JSON.stringify(state), label }, ...rawSnapshots()].slice(0, config.maxSnapshots);
     write(config.snapshotKey, JSON.stringify(list));
   }
 
-  function commit(next: State): void {
-    takeSnapshot();
+  function commit(next: State, label?: string): void {
+    takeSnapshot(label);
     state = next;
     persist();
     emit();
@@ -95,16 +98,16 @@ export function createStore({ storage, config, now = Date.now, onError = () => {
     },
 
     /** Call fn(draft) on a copy of the state. Commits only if fn does not throw; returns fn's result. */
-    mutate<T>(fn: (draft: State) => T): T {
+    mutate<T>(fn: (draft: State) => T, label?: string): T {
       const draft = structuredClone(state);
       const result = fn(draft);
-      commit(draft);
+      commit(draft, label);
       return result;
     },
 
     /** Replace the whole state (setup, import, erase). */
-    replace(next: State): void {
-      commit(next);
+    replace(next: State, label?: string): void {
+      commit(next, label);
     },
 
     subscribe(fn: () => void): () => boolean {
@@ -114,20 +117,20 @@ export function createStore({ storage, config, now = Date.now, onError = () => {
 
     /** Undo points, newest first: [{ ts, entries }]. Restore by index. */
     snapshots(): SnapshotInfo[] {
-      return rawSnapshots().map(({ ts, data }) => {
+      return rawSnapshots().map(({ ts, data, label }) => {
         let entries = 0;
         try {
           entries = JSON.parse(data).log.length;
         } catch {
           /* unreadable snapshot: show 0 */
         }
-        return { ts, entries };
+        return { ts, entries, label: label ?? '' };
       });
     },
     restoreSnapshot(index: number): void {
       const snap = rawSnapshots()[index];
       if (!snap) throw new Error('Snapshot not found.');
-      commit(migrate(JSON.parse(snap.data)));
+      commit(migrate(JSON.parse(snap.data)), 'restoring a snapshot');
     },
 
     exportJSON: (pretty = false): string => JSON.stringify(state, null, pretty ? 2 : 0),
@@ -138,7 +141,7 @@ export function createStore({ storage, config, now = Date.now, onError = () => {
       } catch {
         throw new Error('That is not valid backup text.');
       }
-      commit(migrate(parsed));
+      commit(migrate(parsed), 'importing a backup');
     },
     markBackup(): void {
       state.settings.lastBackup = now();

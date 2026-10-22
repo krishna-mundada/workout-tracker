@@ -1,11 +1,11 @@
 // Entry point: wires the store, the views and the DOM. Rules live in logic.ts, markup in views.ts.
 import { CONFIG, PLAN } from './config';
-import { $, $$, closeModal, download, must, openModal, readForm, readRows, text, toast } from './dom';
+import { $, $$, buzz, closeModal, download, must, openModal, readForm, readRows, text, toast } from './dom';
 import { fmt } from './format';
 import * as T from './logic';
 import { createStore } from './store';
 import type { OnboardingRow } from './types';
-import { entryForm, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type UiState, type ViewCtx } from './views';
+import { entryForm, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
 import './styles.css';
 
 // ---------- setup ----------
@@ -29,6 +29,20 @@ const store = createStore({
 const ui: UiState = { tab: 'today', override: null, optOpen: false, histAll: false };
 let installPrompt: InstallPromptEvent | null = null;
 
+// ---------- theme ----------
+
+const THEMES: Theme[] = ['light', 'dark', 'auto'];
+const THEME_COLOR: Record<Theme, string> = { light: '#f3eeff', dark: '#0b0a1a', auto: '#f3eeff' };
+const savedTheme = (): Theme => {
+  const v = store.getFlag(CONFIG.themeKey);
+  return THEMES.find((t) => t === v) ?? 'light';
+};
+function applyTheme(theme: Theme): void {
+  document.documentElement.dataset.theme = theme;
+  document.querySelector('meta[name=theme-color]')?.setAttribute('content', THEME_COLOR[theme]);
+}
+applyTheme(savedTheme());
+
 const isStandalone = (): boolean =>
   window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
 const isIOS = (): boolean => /iphone|ipad|ipod/i.test(navigator.userAgent);
@@ -45,6 +59,7 @@ const TABS: Record<UiState['tab'], (ctx: ViewCtx) => string> = {
 function context(): ViewCtx {
   const today = T.todayISO();
   return {
+    theme: savedTheme(),
     state: store.state,
     ui,
     en: T.enrich(store.state),
@@ -137,29 +152,31 @@ const actions: Record<string, Action> = {
     const streakDays = text(readForm(must('#obForm')), 'streak');
     const next = T.setupFromOnboarding(T.newState(), { rows, firstIndex: first, streakDays });
     ui.tab = 'today';
-    store.replace(next);
+    store.replace(next, 'first setup');
   },
 
   addSet: (el) => {
     const exId = Number(el.dataset.ex);
     const form = readForm(must('#logForm'));
     const amount = numberOrThrow(text(form, 'actual'));
-    store.mutate((s) => T.addSet(s, { exId, amount, date: text(form, 'date') || T.todayISO() }));
-    toast(`Added ${fmt(amount)}`, { label: 'Undo', run: () => store.mutate((s) => T.removeSet(s, (s.pending?.sets.length ?? 1) - 1)) });
+    store.mutate((s) => T.addSet(s, { exId, amount, date: text(form, 'date') || T.todayISO() }), 'adding a set');
+    buzz();
+    toast(`Added ${fmt(amount)}`, { label: 'Undo', run: () => store.mutate((s) => T.removeSet(s, (s.pending?.sets.length ?? 1) - 1), 'removing a set') });
   },
-  removeSet: (el) => store.mutate((s) => T.removeSet(s, Number(el.dataset.i))),
+  removeSet: (el) => store.mutate((s) => T.removeSet(s, Number(el.dataset.i)), 'removing a set'),
   discardSets: () => {
-    if (confirmed('Throw away the sets so far?')) store.mutate(T.discardSets);
+    if (confirmed('Throw away the sets so far?')) store.mutate(T.discardSets, 'discarding sets');
   },
   finish: () => {
     const form = readForm(must('#logForm'));
     const exId = store.state.pending?.exId;
     const ex = exId === undefined ? null : T.getEx(store.state, exId);
-    const entry = store.mutate((s) => T.finishSession(s, { date: text(form, 'date') || undefined, advance: !form.hold, note: text(form, 'note') }));
+    const entry = store.mutate((s) => T.finishSession(s, { date: text(form, 'date') || undefined, advance: !form.hold, note: text(form, 'note'), minutes: text(form, 'minutes') }), 'finishing a session');
+    buzz(40);
     ui.override = null;
     toast(`Logged ${ex?.name ?? 'session'} ${fmt(entry.actual)}${unitLabel(ex?.unit ?? 'reps')}`, {
       label: 'Undo',
-      run: () => store.mutate((s) => T.deleteEntry(s, entry.id)),
+      run: () => store.mutate((s) => T.deleteEntry(s, entry.id), 'undoing a session'),
     });
   },
 
@@ -172,18 +189,18 @@ const actions: Record<string, Action> = {
   saveEntry: (el) => {
     const f = readForm(must('#modal'));
     const actual = numberOrThrow(text(f, 'actual'));
-    store.mutate((s) => T.editEntry(s, Number(el.dataset.id), { actual, date: text(f, 'date'), advance: !f.hold, note: text(f, 'note') }));
+    store.mutate((s) => T.editEntry(s, Number(el.dataset.id), { actual, date: text(f, 'date'), advance: !f.hold, note: text(f, 'note'), minutes: text(f, 'minutes') }), 'editing an entry');
     closeModal();
   },
   savePast: () => {
     const f = readForm(must('#modal'));
     const actual = numberOrThrow(text(f, 'actual'));
-    store.mutate((s) => T.logSession(s, { exId: Number(text(f, 'exId')), actual, date: text(f, 'date'), advance: !f.hold, note: text(f, 'note') }));
+    store.mutate((s) => T.logSession(s, { exId: Number(text(f, 'exId')), actual, date: text(f, 'date'), advance: !f.hold, note: text(f, 'note'), minutes: text(f, 'minutes') }), 'adding a past entry');
     closeModal();
   },
   delEntry: (el) => {
     if (!confirmed('Delete this entry? Targets and totals will be recalculated.')) return;
-    store.mutate((s) => T.deleteEntry(s, Number(el.dataset.id)));
+    store.mutate((s) => T.deleteEntry(s, Number(el.dataset.id)), 'deleting an entry');
     closeModal();
   },
 
@@ -193,7 +210,7 @@ const actions: Record<string, Action> = {
       lifetime: text(row, 'lifetime'),
       backlog: text(row, 'backlog'),
     }));
-    store.mutate((s) => rows.forEach(({ id, ...patch }) => T.updateExercise(s, id, patch)));
+    store.mutate((s) => rows.forEach(({ id, ...patch }) => T.updateExercise(s, id, patch)), 'editing starting numbers');
     toast('Starting numbers saved.');
   },
 
@@ -202,6 +219,12 @@ const actions: Record<string, Action> = {
     const event = installPrompt;
     installPrompt = null;
     await event.prompt();
+    render();
+  },
+  theme: (el) => {
+    const theme = THEMES.find((t) => t === el.dataset.theme) ?? 'light';
+    store.setFlag(CONFIG.themeKey, theme);
+    applyTheme(theme);
     render();
   },
   dismissInstall: () => {
@@ -242,7 +265,7 @@ const actions: Record<string, Action> = {
     if (!confirmed('Erase all data on this device?')) return;
     if (!confirmed('Really erase everything? A snapshot is kept in Backup > Automatic snapshots until you clear browser data.')) return;
     ui.tab = 'today';
-    store.replace(T.newState());
+    store.replace(T.newState(), 'erasing everything');
   },
 };
 

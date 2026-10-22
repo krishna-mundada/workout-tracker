@@ -87,4 +87,10 @@ describe('store', () => {
     logA(store, '2026-10-01');
     expect(fn).toHaveBeenCalledTimes(1);
   });
+
+  it('labels snapshots with what was about to change', () => {
+    const { store } = setup();
+    store.mutate((s) => T.logSession(s, { exId: T.nextExercise(s)!.id, date: '2026-10-01', actual: 5 }), 'finishing a session');
+    expect(store.snapshots()[0]!.label).toBe('finishing a session');
+  });
 });

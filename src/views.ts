@@ -6,8 +6,8 @@
 import * as T from './logic';
 import type { EnrichedEntry, Exercise, ExerciseStats, State, Streaks } from './types';
 import type { SnapshotInfo } from './store';
-import { PLAN, CONFIG, colorOf } from './config';
-import { esc, fmt, amount, longDate, shortDate } from './format';
+import { PLAN, CONFIG, colorOf, tracksTime } from './config';
+import { esc, fmt, amount, longDate, shortDate, paceLabel, durationLabel } from './format';
 import { dot, chip, field, textInput, select, card, statGrid, listRows, button, banner } from './html';
 
 const DAY_MS = 86400000;
@@ -27,7 +27,10 @@ export interface UiState {
   histAll: boolean;
 }
 
+export type Theme = 'light' | 'dark' | 'auto';
+
 export interface ViewCtx {
+  theme: Theme;
   state: State;
   ui: UiState;
   en: EnrichedEntry[];
@@ -87,6 +90,7 @@ export function viewToday(ctx: ViewCtx): string {
 
   return [
     installBanner(ctx.install),
+    streakBanner(streak, ctx.now),
     backupBanner(state, ctx.now),
     doneBanner(
       en.filter((e) => e.date === today),
@@ -165,6 +169,7 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date }: {
         ${inProgress ? '' : field('Exercise', select('exId', exerciseOptions, ex.id))}
         ${field('Date', `<input type="date" data-f="date" value="${date}">`)}
         <label class="check"><input type="checkbox" data-f="hold">Hold target next time (do not add the increase)</label>
+        ${tracksTime(ex.name) ? field('Time (optional, like 28:30)', textInput('minutes', { placeholder: 'mm:ss' })) : ''}
         ${field('Note', textInput('note', { maxlength: 200 }))}
       </details>
     </div>`,
@@ -178,6 +183,12 @@ function installBanner({ standalone, dismissed }: InstallInfo): string {
     `Install this as an app on your home screen. ${quietButton('How', 'tab', { tab: 'more' })} ${quietButton('x', 'dismissInstall', {}, 'dismiss')}`,
     'ok',
   );
+}
+
+/** Evening nudge when a running streak would break at midnight. */
+function streakBanner(streak: Streaks, now: number): string {
+  if (streak.todayDone || streak.current < 1 || new Date(now).getHours() < CONFIG.streakWarnHour) return '';
+  return banner(`Your ${streak.current}-day streak ends tonight. Log something to keep it.`);
 }
 
 function backupBanner(state: State, now: number): string {
@@ -222,7 +233,8 @@ const historyRow = (e: EnrichedEntry): string =>
   `<button class="hist-row" style="${exStyle(e.name)}" data-act="editEntry" data-id="${e.id}">
     <span><b>${esc(e.name)}</b> <span class="muted num">${fmt(e.actual)} ${esc(e.unit)} of ${fmt(e.target)}</span>${
       e.advance === false ? ' <span class="muted small">(held)</span>' : '' +
-      (e.sets ? ` <span class="muted small">(${e.sets.length} sets)</span>` : '')
+      (e.sets ? ` <span class="muted small">(${e.sets.length} sets)</span>` : '') +
+      (e.minutes ? ` <span class="muted small">${durationLabel(e.minutes)}, ${paceLabel(e.minutes / e.actual, e.unit)}</span>` : '')
     }</span>${chip(e.delta)}
   </button>`;
 
@@ -240,6 +252,7 @@ export function entryForm({ state, today }: Pick<ViewCtx, 'state' | 'today'>, en
     ${field('Date', `<input type="date" data-f="date" value="${isNew ? T.addDays(today, -1) : entry.date}">`)}
     ${field('Amount', textInput('actual', { value: isNew ? '' : entry.actual, mode: 'decimal' }))}
     <label class="check"><input type="checkbox" data-f="hold"${!isNew && entry.advance === false ? ' checked' : ''}>Held (did not advance the target)</label>
+    ${ex && tracksTime(ex.name) ? field('Time (optional, like 28:30)', textInput('minutes', { value: !isNew && entry.minutes ? durationLabel(entry.minutes) : '', placeholder: 'mm:ss' })) : ''}
     ${field('Note', textInput('note', { value: isNew ? '' : entry.note || '', maxlength: 200 }))}
     <div class="btns">
       ${isNew ? '' : button('Delete', 'delEntry', { cls: 'ghost danger', data: id })}
@@ -254,11 +267,20 @@ export function viewProgress({ state, en, today }: ViewCtx): string {
   const heat = T.activityGrid(state, today, CONFIG.heatmapWeeks)
     .map((week) => week.map((c) => `<div class="cell${c.future ? ' future' : c.done ? ' on' : ''}" title="${c.date}"></div>`).join(''))
     .join('');
-  return card(`<h2>Last ${CONFIG.heatmapWeeks} weeks</h2><div class="heat">${heat}</div>`) + state.exercises.map((ex) => exerciseCard(state, ex, en)).join('');
+  return card(`<h2>Last ${CONFIG.heatmapWeeks} weeks</h2><div class="heat">${heat}</div>`) + state.exercises.map((ex) => exerciseCard(state, ex, en, today)).join('');
 }
 
-function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[]): string {
+function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: string): string {
   const x = T.exerciseStats(state, ex, en);
+  const period = T.periodTotals(x.entries, ex.id, today);
+  const pace = tracksTime(ex.name) ? T.paceStats(x.entries) : null;
+  const paceGrid = pace
+    ? statGrid([
+        { value: paceLabel(pace.avg, ex.unit), label: 'average pace' },
+        { value: paceLabel(pace.best, ex.unit), label: 'best pace' },
+        { value: paceLabel(pace.last, ex.unit), label: 'last pace' },
+      ])
+    : '';
   const chart =
     x.entries.length >= 2
       ? `<div class="chartbox">${chartSvg(x.entries)}</div><p class="muted small" style="margin:8px 0 0">Solid: what you did. Dashed: target.</p>`
@@ -269,7 +291,13 @@ function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[]): string {
        { value: fmt(x.total), label: `total ${esc(ex.unit)}` },
        { value: x.sessions, label: 'sessions' },
        { value: fmt(x.target), label: 'next target' },
-     ])}</div>${chart}`,
+     ])}</div>
+     <div style="margin:0 0 14px">${statGrid([
+       { value: fmt(period.week), label: 'this week' },
+       { value: fmt(period.month), label: 'this month' },
+       { value: fmt(x.best), label: 'best session' },
+     ])}</div>
+     ${paceGrid ? `<div style="margin:0 0 14px">${paceGrid}</div>` : ''}${chart}`,
     { cls: 'ex-card', style: exStyle(ex.name) },
   );
 }
@@ -326,6 +354,7 @@ export function viewMore(ctx: ViewCtx): string {
         ${button('Paste text', 'importText')}
       </div>`),
     startingNumbersCard(state),
+    themeCard(ctx.theme),
     snapshotsCard(ctx.snapshots()),
     card(button('Erase everything', 'erase', { cls: 'ghost danger' })),
   ].join('');
@@ -359,11 +388,18 @@ function startingNumbersCard(state: State): string {
     <div style="margin-top:12px">${button('Save starting numbers', 'saveStart', { cls: 'primary' })}</div>`);
 }
 
+function themeCard(theme: Theme): string {
+  const options: Theme[] = ['light', 'dark', 'auto'];
+  return card(`<h2>Appearance</h2><div class="two3">${options
+    .map((t) => button(t === 'auto' ? 'Match phone' : t === 'light' ? 'Light' : 'Dark', 'theme', { cls: t === theme ? 'primary' : 'ghost', data: { theme: t } }))
+    .join('')}</div>`);
+}
+
 function snapshotsCard(snapshots: SnapshotInfo[]): string {
   const body = snapshots.length
     ? listRows(
         snapshots.map((s, i) => [
-          `<span class="small">${new Date(s.ts).toLocaleString()}<br><span class="muted">${s.entries} entries</span></span>`,
+          `<span class="small">${new Date(s.ts).toLocaleString()}<br><span class="muted">${s.label ? `Before ${esc(s.label)}, ` : ''}${s.entries} sessions logged</span></span>`,
           button('Restore', 'restore', { data: { i } }),
         ]),
       )

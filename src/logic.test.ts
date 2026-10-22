@@ -1,0 +1,174 @@
+import { describe, expect, it } from 'vitest';
+import * as T from './logic';
+import type { State } from './types';
+
+function fresh(): State {
+  const s = T.newState();
+  T.setupFromOnboarding(s, {
+    rows: [
+      { name: 'Push-ups', unit: 'reps', step: 1, start: 20, lifetime: '1700' },
+      { name: 'Squats', unit: 'reps', step: 1, start: 20 },
+      { name: 'Crunches', unit: 'reps', step: 1, start: 20 },
+      { name: 'Run', unit: 'km', step: 0.1, start: 2 },
+    ],
+    today: '2026-10-22',
+  });
+  return s;
+}
+
+const next = (s: State) => {
+  const ex = T.nextExercise(s);
+  if (!ex) throw new Error('no next exercise');
+  return ex;
+};
+const name = (s: State) => next(s).name;
+function logNext(s: State, date: string, actual?: number) {
+  const ex = next(s);
+  return T.logSession(s, { exId: ex.id, date, actual: actual ?? T.currentTarget(s, ex) });
+}
+
+describe('rotation and progression', () => {
+  it('rotates in order and adds one step per completed session of that exercise', () => {
+    const s = fresh();
+    const seen: string[] = [];
+    for (let i = 0; i < 9; i++) {
+      const ex = next(s);
+      seen.push(`${ex.name}:${T.currentTarget(s, ex)}`);
+      logNext(s, T.addDays('2026-10-01', i));
+    }
+    expect(seen).toEqual(['Push-ups:20', 'Squats:20', 'Crunches:20', 'Run:2', 'Push-ups:21', 'Squats:21', 'Crunches:21', 'Run:2.1', 'Push-ups:22']);
+  });
+
+  it('ignores calendar gaps', () => {
+    const s = fresh();
+    logNext(s, '2026-10-01');
+    logNext(s, '2026-10-09');
+    expect(name(s)).toBe('Crunches');
+  });
+
+  it('does not let decimals drift', () => {
+    const s = fresh();
+    const run = s.exercises[3]!;
+    for (let k = 0; k < 7; k++) T.logSession(s, { exId: run.id, date: T.addDays('2026-09-01', k), actual: 2 });
+    expect(T.currentTarget(s, run)).toBe(2.7);
+  });
+
+  it('holding a session does not advance the target', () => {
+    const s = fresh();
+    const e = logNext(s, '2026-10-01', 15);
+    T.editEntry(s, e.id, { advance: false });
+    expect(T.currentTarget(s, s.exercises[0]!)).toBe(20);
+  });
+
+  it('skips a deactivated exercise without breaking the cycle', () => {
+    const s = fresh();
+    logNext(s, '2026-10-01');
+    T.updateExercise(s, s.exercises[1]!.id, { active: false });
+    expect(name(s)).toBe('Crunches');
+  });
+
+  it('onboarding keeps the cyclic order from the chosen first exercise', () => {
+    const s = T.newState();
+    const rows = [{ name: 'A', start: 1 }, { name: 'B', start: 1 }, { name: 'C', start: 1 }];
+    T.setupFromOnboarding(s, { rows, firstRow: rows[2] });
+    expect(s.exercises.map((x) => x.name)).toEqual(['C', 'A', 'B']);
+  });
+});
+
+describe('backlog and totals', () => {
+  it('tracks surplus and deficit against the schedule, not against what you did', () => {
+    const s = fresh();
+    logNext(s, '2026-10-01', 25);
+    logNext(s, '2026-10-02', 18);
+    const en = T.enrich(s);
+    expect(en.map((e) => e.delta)).toEqual([5, -2]);
+    expect(T.exerciseStats(s, s.exercises[0]!, en).surplus).toBe(5);
+    expect(T.exerciseStats(s, s.exercises[1]!, en).surplus).toBe(-2);
+    expect(T.currentTarget(s, s.exercises[0]!)).toBe(21);
+  });
+
+  it('lifetime total includes the opening balance', () => {
+    const s = fresh();
+    logNext(s, '2026-10-01', 25);
+    expect(T.exerciseStats(s, s.exercises[0]!).total).toBe(1725);
+  });
+
+  it('accepts typed minus signs, including the unicode one', () => {
+    const s = fresh();
+    const run = s.exercises[3]!;
+    T.updateExercise(s, run.id, { backlog: '−6' });
+    expect(run.backlogOffset).toBe(-6);
+    T.updateExercise(s, run.id, { backlog: '-6,5' });
+    expect(run.backlogOffset).toBe(-6.5);
+  });
+});
+
+describe('editing history', () => {
+  it('deleting an entry recalculates every later target', () => {
+    const s = fresh();
+    const first = logNext(s, '2026-10-01');
+    for (const d of ['02', '03', '04']) logNext(s, `2026-10-${d}`);
+    logNext(s, '2026-10-05', 30);
+    expect(T.enrich(s)[4]!.target).toBe(21);
+    T.deleteEntry(s, first.id);
+    expect(T.enrich(s)[3]!.target).toBe(20);
+    expect(T.enrich(s)[3]!.delta).toBe(10);
+  });
+
+  it('an earlier-dated backfill slots into the right place', () => {
+    const s = fresh();
+    logNext(s, '2026-10-05');
+    T.logSession(s, { exId: s.exercises[0]!.id, date: '2026-10-03', actual: 20 });
+    const e = T.enrich(s);
+    expect([e[0]!.date, e[0]!.target]).toEqual(['2026-10-03', 20]);
+    expect([e[1]!.date, e[1]!.target]).toEqual(['2026-10-05', 21]);
+  });
+
+  it('changing the plan keeps old targets intact', () => {
+    const s = fresh();
+    logNext(s, '2026-10-01');
+    for (let q = 0; q < 3; q++) logNext(s, T.addDays('2026-10-02', q));
+    logNext(s, '2026-10-06');
+    T.resetPlan(s, s.exercises[0]!.id, { start: 30, step: 2 });
+    expect(T.currentTarget(s, s.exercises[0]!)).toBe(30);
+    expect(T.enrich(s)[4]!.target).toBe(21);
+    for (const d of ['07', '08', '09', '10']) logNext(s, `2026-10-${d}`);
+    expect(T.currentTarget(s, s.exercises[0]!)).toBe(32);
+  });
+});
+
+describe('streaks', () => {
+  it('counts the seed, keeps today open, and breaks after a missed day', () => {
+    const s = fresh();
+    T.setStreakSeed(s, 10, '2026-10-22');
+    let st = T.streaks(s, '2026-10-22');
+    expect([st.current, st.todayDone]).toEqual([10, false]);
+    logNext(s, '2026-10-22');
+    st = T.streaks(s, '2026-10-22');
+    expect([st.current, st.todayDone, st.longest]).toEqual([11, true, 11]);
+    st = T.streaks(s, '2026-10-24');
+    expect([st.current, st.longest]).toEqual([0, 11]);
+    expect(T.streaks(s, '2026-10-23').current).toBe(11);
+  });
+});
+
+describe('backup and validation', () => {
+  it('round-trips through migrate and rejects bad input', () => {
+    const s = fresh();
+    logNext(s, '2026-10-01', 22);
+    const back = T.migrate(JSON.parse(JSON.stringify(s)));
+    expect(T.enrich(back)).toEqual(T.enrich(s));
+    expect(() => T.migrate({ nope: 1 })).toThrow();
+    expect(() => T.logSession(s, { exId: 999, actual: 5 })).toThrow();
+    expect(() => T.logSession(s, { exId: s.exercises[0]!.id, actual: 'abc' })).toThrow();
+    expect(() => T.deleteExercise(s, s.exercises[0]!.id)).toThrow();
+  });
+
+  it('never reuses ids after an import', () => {
+    const s = fresh();
+    logNext(s, '2026-10-01');
+    const back = T.migrate(JSON.parse(JSON.stringify(s)));
+    const added = logNext(back, '2026-10-02');
+    expect(s.log.some((l) => l.id === added.id)).toBe(false);
+  });
+});

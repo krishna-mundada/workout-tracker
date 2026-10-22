@@ -1,0 +1,296 @@
+// Entry point: wires the store, the views and the DOM. Rules live in logic.ts, markup in views.ts.
+import { CONFIG, PLAN } from './config';
+import { $, $$, closeModal, download, must, openModal, readForm, readRows, text, toast } from './dom';
+import { fmt } from './format';
+import * as T from './logic';
+import { createStore } from './store';
+import type { OnboardingRow } from './types';
+import { entryForm, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type UiState, type ViewCtx } from './views';
+import './styles.css';
+
+// ---------- setup ----------
+
+interface InstallPromptEvent extends Event {
+  prompt(): Promise<void>;
+}
+
+const store = createStore({
+  storage: (() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  })(),
+  config: CONFIG,
+  onError: (message) => toast(message),
+});
+
+const ui: UiState = { tab: 'today', override: null, optOpen: false, histAll: false };
+let installPrompt: InstallPromptEvent | null = null;
+
+const isStandalone = (): boolean =>
+  window.matchMedia('(display-mode: standalone)').matches || (navigator as Navigator & { standalone?: boolean }).standalone === true;
+const isIOS = (): boolean => /iphone|ipad|ipod/i.test(navigator.userAgent);
+
+// ---------- rendering ----------
+
+const TABS: Record<UiState['tab'], (ctx: ViewCtx) => string> = {
+  today: viewToday,
+  history: viewHistory,
+  progress: viewProgress,
+  more: viewMore,
+};
+
+function context(): ViewCtx {
+  const today = T.todayISO();
+  return {
+    state: store.state,
+    ui,
+    en: T.enrich(store.state),
+    today,
+    now: Date.now(),
+    streak: T.streaks(store.state, today),
+    install: {
+      standalone: isStandalone(),
+      canPrompt: installPrompt !== null,
+      ios: isIOS(),
+      dismissed: store.getFlag(CONFIG.installDismissedKey) === '1',
+    },
+    snapshots: () => store.snapshots(),
+  };
+}
+
+function render(): void {
+  const app = must('#app');
+  const nav = must('#tabs');
+  if (!store.state.exercises.length) {
+    nav.hidden = true;
+    app.innerHTML = viewOnboarding();
+    return;
+  }
+  nav.hidden = false;
+  $$('button', nav).forEach((b) => b.classList.toggle('on', b.dataset.tab === ui.tab));
+  app.innerHTML = TABS[ui.tab](context());
+}
+
+store.subscribe(render);
+
+// ---------- helpers ----------
+
+/** Parse a typed number or throw a message the user can act on. */
+function numberOrThrow(value: string, message = 'Enter a number.'): number {
+  const n = T.toNumber(value);
+  if (!Number.isFinite(n)) throw new Error(message);
+  return n;
+}
+
+const unitLabel = (unit: string): string => (unit === 'reps' ? '' : ` ${unit}`);
+const confirmed = (message: string): boolean => window.confirm(message);
+
+function bump(direction: 1 | -1): void {
+  const input = must<HTMLInputElement>('[data-f="actual"]');
+  const value = parseFloat(input.value.replace(',', '.')) || 0;
+  input.value = String(Math.max(0, T.r(value + direction * (Number(input.dataset.step) || 1))));
+}
+
+function importFrom(text: string): void {
+  if (!confirmed('Replace current data with this backup?')) return;
+  store.importJSON(text);
+  toast('Backup imported.');
+}
+
+// ---------- actions (data-act="name") ----------
+
+type Action = (el: HTMLElement) => void | Promise<void>;
+
+const actions: Record<string, Action> = {
+  tab: (el) => {
+    ui.tab = (el.dataset.tab as UiState['tab']) ?? 'today';
+    ui.override = null;
+    render();
+    window.scrollTo(0, 0);
+  },
+  dec: () => bump(-1),
+  inc: () => bump(1),
+  closeModal,
+  histAll: () => {
+    ui.histAll = true;
+    render();
+  },
+
+  start: () => {
+    const rows: OnboardingRow[] = $$('.ob-row', must('#obForm')).map((row, i) => {
+      const plan = PLAN[i];
+      if (!plan) throw new Error('Unexpected row.');
+      const f = readForm(row);
+      return {
+        name: plan.name,
+        unit: plan.unit,
+        step: plan.step,
+        start: numberOrThrow(text(f, 'target'), `Enter a next target for ${plan.name}.`),
+        lifetime: text(f, 'lifetime'),
+        backlog: text(f, 'backlog'),
+      };
+    });
+    const first = Number($<HTMLInputElement>('input[name=first]:checked')?.value ?? 0);
+    const streakDays = text(readForm(must('#obForm')), 'streak');
+    const next = T.setupFromOnboarding(T.newState(), { rows, firstIndex: first, streakDays });
+    ui.tab = 'today';
+    store.replace(next);
+  },
+
+  log: (el) => {
+    const form = readForm(must('#logForm'));
+    const exId = Number(el.dataset.ex);
+    const ex = T.getEx(store.state, exId);
+    if (!ex) throw new Error('Exercise not found.');
+    const actual = numberOrThrow(text(form, 'actual'));
+    if (actual < 0) throw new Error('Enter a number.');
+    const entry = store.mutate((s) =>
+      T.logSession(s, { exId, actual, date: text(form, 'date') || T.todayISO(), advance: !form.hold, note: text(form, 'note') }),
+    );
+    ui.override = null;
+    toast(`Logged ${ex.name} ${fmt(actual)}${unitLabel(ex.unit)}`, {
+      label: 'Undo',
+      run: () => store.mutate((s) => T.deleteEntry(s, entry.id)),
+    });
+  },
+
+  editEntry: (el) => {
+    const id = Number(el.dataset.id);
+    const entry = T.enrich(store.state).find((e) => e.id === id);
+    if (entry) openModal(entryForm({ state: store.state, today: T.todayISO() }, entry));
+  },
+  addPast: () => openModal(entryForm({ state: store.state, today: T.todayISO() })),
+  saveEntry: (el) => {
+    const f = readForm(must('#modal'));
+    const actual = numberOrThrow(text(f, 'actual'));
+    store.mutate((s) => T.editEntry(s, Number(el.dataset.id), { actual, date: text(f, 'date'), advance: !f.hold, note: text(f, 'note') }));
+    closeModal();
+  },
+  savePast: () => {
+    const f = readForm(must('#modal'));
+    const actual = numberOrThrow(text(f, 'actual'));
+    store.mutate((s) => T.logSession(s, { exId: Number(text(f, 'exId')), actual, date: text(f, 'date'), advance: !f.hold, note: text(f, 'note') }));
+    closeModal();
+  },
+  delEntry: (el) => {
+    if (!confirmed('Delete this entry? Targets and totals will be recalculated.')) return;
+    store.mutate((s) => T.deleteEntry(s, Number(el.dataset.id)));
+    closeModal();
+  },
+
+  saveStart: () => {
+    const rows = readRows(must('#startForm'), '.ob-row').map((row) => ({
+      id: Number(row.id),
+      lifetime: text(row, 'lifetime'),
+      backlog: text(row, 'backlog'),
+    }));
+    store.mutate((s) => rows.forEach(({ id, ...patch }) => T.updateExercise(s, id, patch)));
+    toast('Starting numbers saved.');
+  },
+
+  install: async () => {
+    if (!installPrompt) return;
+    const event = installPrompt;
+    installPrompt = null;
+    await event.prompt();
+    render();
+  },
+  dismissInstall: () => {
+    store.setFlag(CONFIG.installDismissedKey, '1');
+    render();
+  },
+
+  exportFile: () => {
+    download(`workout-backup-${T.todayISO()}.json`, store.exportJSON(true));
+    store.markBackup();
+    toast('Backup downloaded.');
+  },
+  copyBackup: async () => {
+    try {
+      await navigator.clipboard.writeText(store.exportJSON());
+      store.markBackup();
+      toast('Copied. Paste it somewhere safe, like Notes.');
+    } catch {
+      toast('Copy was blocked. Use Download instead.');
+    }
+  },
+  importText: () =>
+    openModal(
+      '<h2>Paste backup text</h2><textarea id="m-text" placeholder="Paste the copied backup here"></textarea>' +
+        '<div class="btns"><button class="ghost" data-act="closeModal">Cancel</button><button class="primary" data-act="doImportText">Import</button></div>',
+    ),
+  doImportText: () => {
+    const value = must<HTMLTextAreaElement>('#m-text').value;
+    closeModal();
+    importFrom(value);
+  },
+  restore: (el) => {
+    if (!confirmed('Restore this snapshot? Your current state is saved as a new snapshot first.')) return;
+    store.restoreSnapshot(Number(el.dataset.i));
+    toast('Snapshot restored.');
+  },
+  erase: () => {
+    if (!confirmed('Erase all data on this device?')) return;
+    if (!confirmed('Really erase everything? A snapshot is kept in Backup > Automatic snapshots until you clear browser data.')) return;
+    ui.tab = 'today';
+    store.replace(T.newState());
+  },
+};
+
+// ---------- events ----------
+
+async function run(fn: Action, el: HTMLElement): Promise<void> {
+  try {
+    await fn(el);
+  } catch (err) {
+    toast(err instanceof Error ? err.message : String(err));
+  }
+}
+
+document.addEventListener('click', (e) => {
+  const el = (e.target as HTMLElement).closest<HTMLElement>('[data-act]');
+  const fn = el && actions[el.dataset.act ?? ''];
+  if (el && fn) void run(fn, el);
+});
+
+document.addEventListener('change', (e) => {
+  const el = e.target as HTMLInputElement | HTMLSelectElement;
+  if (el.dataset.f === 'exId' && el.closest('#logForm')) {
+    ui.override = Number(el.value);
+    ui.optOpen = true;
+    render();
+  } else if (el.id === 'importFile' && el instanceof HTMLInputElement && el.files?.[0]) {
+    void el.files[0].text().then((content) => run(() => importFrom(content), el), () => toast('Could not read that file.'));
+  }
+});
+
+// toggle does not bubble, so listen in the capture phase.
+document.addEventListener(
+  'toggle',
+  (e) => {
+    const el = e.target as HTMLDetailsElement;
+    if (el.id === 'opts') ui.optOpen = el.open;
+  },
+  true,
+);
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  installPrompt = e as InstallPromptEvent;
+  render();
+});
+window.addEventListener('appinstalled', () => {
+  installPrompt = null;
+  render();
+});
+
+// ---------- boot ----------
+
+void navigator.storage?.persist?.().catch(() => {});
+if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
+  navigator.serviceWorker.register('/sw.js').catch(() => {});
+}
+render();

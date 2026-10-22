@@ -1,62 +1,47 @@
 # Workout Tracker
 
-A small offline-capable web app (PWA) for one specific routine: four exercises in rotation, and each exercise goes up by one step every time you complete it.
+Personal installable PWA. Four exercises in strict rotation (Push-ups, Squats, Crunches, Run). Each exercise's target goes up one step every time that exercise is completed. Tracks streaks, backlog (actual minus target, all time), lifetime totals, history and charts.
 
-Push-ups, squats, crunches, run, repeat. Push-ups 20 today, squats 20 tomorrow, crunches 20, run 2 km, then push-ups 21.
+TypeScript (strict), Vite, Vitest. No framework, no runtime dependencies. Data lives in the browser's localStorage.
 
-## What it tracks
-
-- Today's exercise and target, with a stepper to log what you actually did
-- Backlog per exercise: actual minus target, all time (plus means ahead)
-- Day streak, best streak, active days, 12-week activity grid
-- Per-exercise lifetime total, session count, next target, and a chart of actual vs target
-- Full history, with edit and delete (targets and totals recalculate)
-
-Everything is derived from the log. Missed days do not shift the rotation or the targets, and fixing a wrong entry never leaves the numbers out of sync.
-
-## Files
-
-| File | What it does |
-|---|---|
-| `index.html` | Page shell and all styling |
-| `app.js` | Screens and buttons. The routine itself is the `PLAN` list at the top |
-| `logic.js` | The rules: rotation, targets, backlog, streaks. No UI, no storage |
-| `logic.test.js` | Tests for the rules. Run `node logic.test.js` |
-| `sw.js`, `manifest.webmanifest`, icons | Make it installable and usable offline |
-
-## Run it locally
+## Commands
 
 ```
-python3 -m http.server 8000
+npm install
+npm run dev        # local dev server
+npm test           # vitest
+npm run typecheck
+npm run build      # typecheck + production build into dist/
 ```
 
-Open http://localhost:8000. Plain `file://` will not work for installing or offline use.
+Pushing to `master` redeploys on Vercel (framework preset: Vite, output `dist`).
 
-## Put it on your phone
+## Layout
 
-Any static host works, no build step. Pick one:
+| File | Job |
+| --- | --- |
+| `src/config.ts` | The routine (`PLAN`) and tuning numbers. The one file to edit for most changes. |
+| `src/types.ts` | Data shapes. |
+| `src/logic.ts` | All rules, pure functions, no DOM or storage. Everything shown is derived from the log. |
+| `src/store.ts` | Persistence, undo snapshots, import and export. Storage is injected so tests use a fake. |
+| `src/views.ts` | Screens as pure functions returning HTML. |
+| `src/html.ts`, `src/format.ts` | Small markup and formatting helpers shared by the views. |
+| `src/dom.ts` | Form reading, toast, modal, download. |
+| `src/app.ts` | Wiring: state, rendering, the `actions` map (`data-act="name"`), events. |
+| `src/styles.css` | Theme variables at the top; per-exercise colours come from `PLAN`. |
+| `public/` | Service worker (network first), manifest, icons. |
 
-- Vercel: run `npx vercel` in this folder, or import the folder as a project
-- Netlify: drag the folder onto https://app.netlify.com/drop
-- GitHub Pages: push the folder to a repo and enable Pages
+## Changing things
 
-Then open the URL on your phone and add it to the home screen (Share > Add to Home Screen on iPhone, menu > Install app on Android).
+- Step size, colour or start value: edit `PLAN` in `config.ts`. Start values only affect the first-run screen.
+- Rules (rotation, targets, streaks): `logic.ts`, then add a test in `logic.test.ts`.
+- New button or screen action: add a function to `actions` in `app.ts` and a `data-act` in the view.
+- Do not change `storageKey` or `snapshotKey` in `config.ts`: they match the data already on the phone.
 
-## Your data
+## Install on a phone
 
-Data is stored in the browser on your device (localStorage). There is no server and no account. That keeps it private and free, but it means:
+iPhone: open the site in Safari, Share, Add to Home Screen. Android: Chrome menu, Install app. It must be the browser itself, not a link opened inside another app. The app also shows an install card under Backup.
 
-- Clearing browser data or switching phones loses it unless you have a backup
-- Use Backup > Download file, or Copy as text and paste it into Notes, every week or so. The app nags after 7 days
-- The app also keeps its last 6 states automatically (Backup > Automatic snapshots) so a mistake can be rolled back
-- Installing to the home screen matters on iPhone: Safari can clear storage for sites you have not opened in a while, but installed apps are exempt
+## Backups
 
-## Changing the routine later
-
-Open this folder in Claude Code and describe the change. Examples:
-
-- "Add diamond push-ups to the rotation after push-ups"
-- "Run should go up by 0.2 km instead of 0.1"
-- "Add a weekly total chart"
-
-For a new exercise, add a line to `PLAN` in `app.js`. Existing saved data keeps working, but a new exercise needs to be added to the saved state too, so ask Claude Code to include a small migration that adds it with your starting numbers. Run `node logic.test.js` after any change to `logic.js`.
+Data is per browser. Use Backup > Download file or Copy as text now and then. The app also keeps the last few states automatically (Backup > Automatic snapshots).

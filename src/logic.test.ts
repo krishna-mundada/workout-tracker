@@ -172,3 +172,46 @@ describe('backup and validation', () => {
     expect(s.log.some((l) => l.id === added.id)).toBe(false);
   });
 });
+
+describe('sets in batches', () => {
+  it('sums sets into one session and advances the target once', () => {
+    const s = fresh();
+    const id = next(s).id;
+    for (const n of [20, 20, 5]) T.addSet(s, { exId: id, amount: n, date: '2026-10-01' });
+    expect(T.pendingTotal(s)).toBe(45);
+    const entry = T.finishSession(s, {});
+    expect([entry.actual, entry.date, entry.sets]).toEqual([45, '2026-10-01', [20, 20, 5]]);
+    expect(s.pending).toBeNull();
+    expect(T.enrich(s)[0]!.delta).toBe(25);
+    expect(name(s)).toBe('Squats');
+    expect(T.currentTarget(s, s.exercises[0]!)).toBe(21);
+  });
+
+  it('removes sets, and clears the session when the last one goes', () => {
+    const s = fresh();
+    const id = next(s).id;
+    T.addSet(s, { exId: id, amount: 10 });
+    T.addSet(s, { exId: id, amount: 5 });
+    T.removeSet(s, 0);
+    expect(s.pending?.sets).toEqual([5]);
+    T.removeSet(s, 0);
+    expect(s.pending).toBeNull();
+  });
+
+  it('refuses a second exercise while sets are pending, and bad amounts', () => {
+    const s = fresh();
+    T.addSet(s, { exId: s.exercises[0]!.id, amount: 10 });
+    expect(() => T.addSet(s, { exId: s.exercises[1]!.id, amount: 10 })).toThrow();
+    expect(() => T.addSet(s, { exId: s.exercises[0]!.id, amount: 0 })).toThrow();
+    expect(() => T.finishSession(T.newState())).toThrow();
+  });
+
+  it('survives a backup round trip', () => {
+    const s = fresh();
+    T.addSet(s, { exId: s.exercises[0]!.id, amount: 12, date: '2026-10-01' });
+    const back = T.migrate(JSON.parse(JSON.stringify(s)));
+    expect(back.pending).toEqual(s.pending);
+    const entry = T.finishSession(T.migrate(JSON.parse(JSON.stringify(s))));
+    expect(entry.actual).toBe(12);
+  });
+});

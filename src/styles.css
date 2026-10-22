@@ -104,3 +104,13 @@ textarea{min-height:140px;font:12px ui-monospace,monospace}
 .ob-row{border-top:1px solid var(--line);padding:12px 0}
 .ob-row:first-of-type{border-top:0}
 .two{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+
+/* sets in progress */
+.progress{height:10px;border-radius:99px;background:rgba(255,255,255,.55);overflow:hidden;margin:12px 0 8px}
+.progress i{display:block;height:100%;border-radius:99px;background:var(--btn-ink)}
+.hero .row.small{color:var(--btn-ink)}
+.sets{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.set{border:0;border-radius:99px;padding:5px 12px;background:rgba(255,255,255,.72);color:var(--btn-ink);font-weight:800}
+.wide{width:100%;margin-top:10px;padding:13px}
+.hero .ghost{border-color:rgba(20,8,46,.35);color:var(--btn-ink)}
+.link{display:block;margin:10px auto 0;border:0;background:transparent;color:rgba(20,8,46,.7);font-weight:700;text-decoration:underline}

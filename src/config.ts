@@ -12,15 +12,17 @@ export interface PlanItem {
   name: string;
   unit: string;
   step: number;
+  /** Stepper size when adding a set. */
+  setStep: number;
   start: number;
   color: string;
 }
 
 export const PLAN: PlanItem[] = [
-  { name: 'Push-ups', unit: 'reps', step: 1, start: 20, color: '#ff4f7b' },
-  { name: 'Squats', unit: 'reps', step: 1, start: 20, color: '#9b6bff' },
-  { name: 'Crunches', unit: 'reps', step: 1, start: 20, color: '#ffb81c' },
-  { name: 'Run', unit: 'km', step: 0.1, start: 2, color: '#18c5e8' },
+  { name: 'Push-ups', unit: 'reps', step: 1, setStep: 5, start: 20, color: '#ff4f7b' },
+  { name: 'Squats', unit: 'reps', step: 1, setStep: 5, start: 20, color: '#9b6bff' },
+  { name: 'Crunches', unit: 'reps', step: 1, setStep: 5, start: 20, color: '#ffb81c' },
+  { name: 'Run', unit: 'km', step: 0.1, setStep: 0.5, start: 2, color: '#18c5e8' },
 ];
 
 export const CONFIG = {

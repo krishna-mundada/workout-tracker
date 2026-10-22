@@ -68,6 +68,7 @@ export const newState = (): State => ({
   exercises: [],
   log: [],
   settings: { nextId: 1, streakSeed: null, lastBackup: null },
+  pending: null,
 });
 
 /** Validate and normalise untrusted state (saved data or an imported backup). Throws a readable error. */
@@ -109,6 +110,7 @@ export function migrate(obj: any): State {
       advance: l.advance !== false,
       note: l.note ? String(l.note) : '',
       ts: l.ts || 0,
+      ...(Array.isArray(l.sets) && l.sets.length > 1 ? { sets: l.sets.map(Number) } : {}),
     });
   }
 
@@ -117,6 +119,11 @@ export function migrate(obj: any): State {
   s.settings.lastBackup = st.lastBackup || null;
   const seed = st.streakSeed;
   s.settings.streakSeed = seed && seed.days > 0 && isISO(seed.endDate) ? { days: Number(seed.days), endDate: seed.endDate } : null;
+  const p = obj.pending;
+  if (p && typeof p.exId === 'number' && isISO(p.date) && Array.isArray(p.sets) && s.exercises.some((e) => e.id === p.exId)) {
+    const sets = p.sets.map(Number).filter((n: number) => Number.isFinite(n) && n > 0);
+    if (sets.length) s.pending = { exId: p.exId, date: p.date, sets };
+  }
   return s;
 }
 
@@ -374,6 +381,45 @@ export function logSession(state: State, { exId, actual, date, advance, note }: 
     ts: Date.now(),
   };
   state.log.push(entry);
+  return entry;
+}
+
+// ---------- sets (logging a session in batches) ----------
+
+export const pendingTotal = (state: State): number => r((state.pending?.sets ?? []).reduce((a, b) => a + b, 0));
+
+/** Add one set to the session in progress, starting it if needed. */
+export function addSet(state: State, { exId, amount, date }: { exId: number; amount: number | string; date?: string }): void {
+  if (!getEx(state, exId)) throw new Error('Exercise not found.');
+  const n = requireNumber(amount, 'Amount');
+  if (n <= 0) throw new Error('A set needs more than 0.');
+  if (state.pending && state.pending.exId !== exId) throw new Error('Finish or discard the sets in progress first.');
+  if (!state.pending) {
+    const day = date || todayISO();
+    if (!isISO(day)) throw new Error('Pick a valid date.');
+    state.pending = { exId, date: day, sets: [] };
+  }
+  state.pending.sets.push(r(n));
+}
+
+export function removeSet(state: State, index: number): void {
+  const p = state.pending;
+  if (!p || index < 0 || index >= p.sets.length) throw new Error('Set not found.');
+  p.sets.splice(index, 1);
+  if (!p.sets.length) state.pending = null;
+}
+
+export function discardSets(state: State): void {
+  state.pending = null;
+}
+
+/** Turn the sets in progress into one logged session (the sum of the sets). */
+export function finishSession(state: State, { date, advance, note }: { date?: string; advance?: boolean; note?: string } = {}): LogEntry {
+  const p = state.pending;
+  if (!p) throw new Error('No sets to finish.');
+  const entry = logSession(state, { exId: p.exId, actual: pendingTotal(state), date: date || p.date, advance, note });
+  if (p.sets.length > 1) entry.sets = [...p.sets];
+  state.pending = null;
   return entry;
 }
 

@@ -38,7 +38,7 @@ export interface ViewCtx {
   snapshots: () => SnapshotInfo[];
 }
 
-const stepOf = (ex: Exercise): number => T.currentCycle(ex).step || 1;
+const setStepOf = (ex: Exercise): number => PLAN.find((p) => p.name === ex.name)?.setStep ?? 1;
 const exStyle = (name: string): string => `--ex:${colorOf(name)}`;
 const exLabel = (name: string): string => dot(name) + esc(name);
 const quietButton = (label: string, act: string, data: Record<string, string | number>, aria?: string): string => button(label, act, { cls: '', data, aria });
@@ -79,7 +79,9 @@ export function viewToday(ctx: ViewCtx): string {
   const active = T.activeList(state);
   if (!active.length) return card('<h2>No active exercises</h2>');
 
-  const ex = active.find((e) => e.id === ui.override) ?? T.nextExercise(state);
+  // Sets in progress pin the screen to that exercise until the session is finished or discarded.
+  const pinned = state.pending ? T.getEx(state, state.pending.exId) : null;
+  const ex = pinned ?? active.find((e) => e.id === ui.override) ?? T.nextExercise(state);
   if (!ex) return card('<h2>No active exercises</h2>');
   const upcoming = T.rotationPreview(state, active.length).filter((p) => p.ex.id !== ex.id);
 
@@ -90,7 +92,7 @@ export function viewToday(ctx: ViewCtx): string {
       en.filter((e) => e.date === today),
       streak,
     ),
-    hero({ ex, stats: T.exerciseStats(state, ex, en), ui, today, doneToday: streak.todayDone, options: active }),
+    hero({ ex, stats: T.exerciseStats(state, ex, en), ui, today, doneToday: streak.todayDone, options: active, sets: state.pending?.sets ?? [], date: state.pending?.date ?? today }),
     card(
       statGrid([
         { value: streak.current, label: 'day streak', color: 'var(--c1)' },
@@ -108,19 +110,42 @@ export function viewToday(ctx: ViewCtx): string {
   ].join('');
 }
 
-function hero({ ex, stats, ui, today, doneToday, options }: {
+function hero({ ex, stats, ui, today, doneToday, options, sets, date }: {
   ex: Exercise;
   stats: ExerciseStats;
   ui: UiState;
   today: string;
   doneToday: boolean;
   options: Exercise[];
+  sets: number[];
+  date: string;
 }): string {
   const { target, last } = stats;
+  const done = T.r(sets.reduce((a, b) => a + b, 0));
+  const remaining = T.r(Math.max(0, target - done));
+  const inProgress = sets.length > 0;
+  const lastSet = sets[sets.length - 1];
+  const suggested = inProgress && lastSet !== undefined && remaining > 0 ? Math.min(remaining, lastSet) : remaining || target;
+
   const lastLine = last
     ? `Last time ${amount(last.actual, ex.unit)} on ${shortDate(last.date)} &nbsp;${chip(last.delta)}`
     : 'First session of this exercise.';
   const exerciseOptions = options.map((e) => ({ value: e.id, label: e.name }));
+  const pct = Math.min(100, Math.round((done / (target || 1)) * 100));
+
+  const progress = inProgress
+    ? `<div class="progress"><i style="width:${pct}%"></i></div>
+       <div class="row small"><b>${fmt(done)} of ${fmt(target)} ${esc(ex.unit)}</b><span>${remaining > 0 ? `${fmt(remaining)} to go` : done > target ? `${fmt(T.r(done - target))} over` : 'target reached'}</span></div>
+       <div class="sets">${sets.map((n, i) => `<button class="set" data-act="removeSet" data-i="${i}" aria-label="remove set">${fmt(n)} &times;</button>`).join('')}</div>`
+    : '';
+
+  const finishLabel = remaining > 0 ? `Finish early at ${fmt(done)}` : `Finish ${ex.name}`;
+  const buttons = inProgress
+    ? (remaining > 0
+        ? button('Add set', 'addSet', { cls: 'primary', data: { ex: ex.id } }) + button(finishLabel, 'finish', { cls: 'ghost wide' })
+        : button(finishLabel, 'finish', { cls: 'primary' }) + button('Add set', 'addSet', { cls: 'ghost wide', data: { ex: ex.id } })) +
+      button('Discard sets', 'discardSets', { cls: 'link' })
+    : button('Add set', 'addSet', { cls: 'primary', data: { ex: ex.id } });
 
   return card(
     `<div id="logForm">
@@ -128,16 +153,17 @@ function hero({ ex, stats, ui, today, doneToday, options }: {
       <h1>${esc(ex.name)}</h1>
       <div class="target"><b>${fmt(target)}</b><span>${esc(ex.unit)}</span></div>
       <div class="muted small">${lastLine}</div>
+      ${progress}
       <div class="stepper">
         <button class="sq" data-act="dec" aria-label="less">-</button>
-        ${textInput('actual', { value: target, mode: 'decimal', extra: `data-step="${stepOf(ex)}"` })}
+        ${textInput('actual', { value: suggested, mode: 'decimal', extra: `data-step="${setStepOf(ex)}"` })}
         <button class="sq" data-act="inc" aria-label="more">+</button>
       </div>
-      ${button(`Log ${ex.name}`, 'log', { cls: 'primary', data: { ex: ex.id } })}
+      ${buttons}
       <details id="opts"${ui.optOpen ? ' open' : ''}>
         <summary>Options</summary>
-        ${field('Exercise', select('exId', exerciseOptions, ex.id))}
-        ${field('Date', `<input type="date" data-f="date" value="${today}">`)}
+        ${inProgress ? '' : field('Exercise', select('exId', exerciseOptions, ex.id))}
+        ${field('Date', `<input type="date" data-f="date" value="${date}">`)}
         <label class="check"><input type="checkbox" data-f="hold">Hold target next time (do not add the increase)</label>
         ${field('Note', textInput('note', { maxlength: 200 }))}
       </details>
@@ -195,7 +221,8 @@ export function viewHistory({ en, ui }: ViewCtx): string {
 const historyRow = (e: EnrichedEntry): string =>
   `<button class="hist-row" style="${exStyle(e.name)}" data-act="editEntry" data-id="${e.id}">
     <span><b>${esc(e.name)}</b> <span class="muted num">${fmt(e.actual)} ${esc(e.unit)} of ${fmt(e.target)}</span>${
-      e.advance === false ? ' <span class="muted small">(held)</span>' : ''
+      e.advance === false ? ' <span class="muted small">(held)</span>' : '' +
+      (e.sets ? ` <span class="muted small">(${e.sets.length} sets)</span>` : '')
     }</span>${chip(e.delta)}
   </button>`;
 

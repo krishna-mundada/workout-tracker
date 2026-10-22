@@ -140,18 +140,24 @@ const actions: Record<string, Action> = {
     store.replace(next);
   },
 
-  log: (el) => {
-    const form = readForm(must('#logForm'));
+  addSet: (el) => {
     const exId = Number(el.dataset.ex);
-    const ex = T.getEx(store.state, exId);
-    if (!ex) throw new Error('Exercise not found.');
-    const actual = numberOrThrow(text(form, 'actual'));
-    if (actual < 0) throw new Error('Enter a number.');
-    const entry = store.mutate((s) =>
-      T.logSession(s, { exId, actual, date: text(form, 'date') || T.todayISO(), advance: !form.hold, note: text(form, 'note') }),
-    );
+    const form = readForm(must('#logForm'));
+    const amount = numberOrThrow(text(form, 'actual'));
+    store.mutate((s) => T.addSet(s, { exId, amount, date: text(form, 'date') || T.todayISO() }));
+    toast(`Added ${fmt(amount)}`, { label: 'Undo', run: () => store.mutate((s) => T.removeSet(s, (s.pending?.sets.length ?? 1) - 1)) });
+  },
+  removeSet: (el) => store.mutate((s) => T.removeSet(s, Number(el.dataset.i))),
+  discardSets: () => {
+    if (confirmed('Throw away the sets so far?')) store.mutate(T.discardSets);
+  },
+  finish: () => {
+    const form = readForm(must('#logForm'));
+    const exId = store.state.pending?.exId;
+    const ex = exId === undefined ? null : T.getEx(store.state, exId);
+    const entry = store.mutate((s) => T.finishSession(s, { date: text(form, 'date') || undefined, advance: !form.hold, note: text(form, 'note') }));
     ui.override = null;
-    toast(`Logged ${ex.name} ${fmt(actual)}${unitLabel(ex.unit)}`, {
+    toast(`Logged ${ex?.name ?? 'session'} ${fmt(entry.actual)}${unitLabel(ex?.unit ?? 'reps')}`, {
       label: 'Undo',
       run: () => store.mutate((s) => T.deleteEntry(s, entry.id)),
     });

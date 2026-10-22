@@ -27,6 +27,8 @@ export interface LogEntry {
   advance: boolean;
   note: string;
   ts: number;
+  /** The individual sets, when the session was logged in batches. */
+  sets?: number[];
 }
 
 export interface Settings {
@@ -35,11 +37,19 @@ export interface Settings {
   lastBackup: number | null;
 }
 
+/** A session being built up set by set. It becomes a log entry when finished. */
+export interface PendingSession {
+  exId: number;
+  date: string;
+  sets: number[];
+}
+
 export interface State {
   version: 1;
   exercises: Exercise[];
   log: LogEntry[];
   settings: Settings;
+  pending: PendingSession | null;
 }
 
 /** A log entry with the target it was measured against. */

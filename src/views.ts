@@ -228,6 +228,7 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date, canRest }:
         ${ex.tracksTime ? field('Time (optional, like 28:30)', textInput('minutes', { placeholder: 'mm:ss' })) : ''}
         ${field('Note', textInput('note', { maxlength: 200 }))}
       </details>
+      ${button('Log extra or catch up', 'addExtra', { cls: 'link' })}
       ${canRest ? button('Take a rest day', 'restDay', { cls: 'link' }) : ''}
     </div>`,
     { cls: 'hero', style: exStyle(ex.color) },
@@ -294,12 +295,29 @@ export function viewHistory({ en, ui }: ViewCtx): string {
 
 const historyRow = (e: EnrichedEntry): string =>
   `<button class="hist-row" style="${exStyle(e.color)}" data-act="editEntry" data-id="${e.id}">
-    <span><b>${esc(e.name)}</b> <span class="muted num">${fmt(e.actual)} ${esc(e.unit)} of ${fmt(e.target)}</span>${
-      e.advance === false ? ' <span class="muted small">(held)</span>' : '' +
+    <span><b>${esc(e.name)}</b> <span class="muted num">${e.extra ? `${fmt(e.actual)} ${esc(e.unit)} extra` : `${fmt(e.actual)} ${esc(e.unit)} of ${fmt(e.target)}`}</span>${
+      e.advance === false && !e.extra ? ' <span class="muted small">(held)</span>' : '' +
       (e.sets ? ` <span class="muted small">(${e.sets.length} sets)</span>` : '') +
       (e.minutes ? ` <span class="muted small">${durationLabel(e.minutes)}, ${paceLabel(e.minutes / e.actual, e.unit)}</span>` : '')
     }</span>${chip(e.delta)}
   </button>`;
+
+/** Log extra work on any exercise, typically to pay down a backlog. */
+export function extraForm(state: State, today: string): string {
+  const en = T.enrich(state);
+  const options = state.exercises.map((e) => {
+    const surplus = T.exerciseStats(state, e, en).surplus;
+    return { ex: e, surplus, label: `${e.name} (backlog ${surplus > 0 ? '+' : ''}${fmt(surplus)} ${e.unit})` };
+  });
+  const worst = options.reduce((a, b) => (b.surplus < a.surplus ? b : a), options[0] as (typeof options)[number]);
+  return `<h2>Log extra</h2>
+    <p class="small muted">Extra work counts toward your totals and pays down the backlog. It does not move the rotation or raise any target.</p>
+    ${field('Exercise', select('exId', options.map((o) => ({ value: o.ex.id, label: o.label })), worst.ex.id))}
+    ${field('Amount', textInput('actual', { mode: 'decimal', placeholder: 'e.g. 20' }))}
+    ${field('Date', `<input type="date" data-f="date" value="${today}">`)}
+    ${field('Note', textInput('note', { maxlength: 200 }))}
+    <div class="btns">${button('Cancel', 'closeModal')}${button('Save', 'saveExtra', { cls: 'primary' })}</div>`;
+}
 
 export function entryForm({ state, today }: Pick<ViewCtx, 'state' | 'today'>, entry?: EnrichedEntry | null): string {
   const isNew = !entry;
@@ -314,7 +332,7 @@ export function entryForm({ state, today }: Pick<ViewCtx, 'state' | 'today'>, en
     ${picker}
     ${field('Date', `<input type="date" data-f="date" value="${isNew ? T.addDays(today, -1) : entry.date}">`)}
     ${field('Amount', textInput('actual', { value: isNew ? '' : entry.actual, mode: 'decimal' }))}
-    <label class="check"><input type="checkbox" data-f="hold"${!isNew && entry.advance === false ? ' checked' : ''}>Held (did not advance the target)</label>
+    ${!isNew && entry.extra ? '' : `<label class="check"><input type="checkbox" data-f="hold"${!isNew && entry.advance === false ? ' checked' : ''}>Held (did not advance the target)</label>`}
     ${ex?.tracksTime ? field('Time (optional, like 28:30)', textInput('minutes', { value: !isNew && entry.minutes ? durationLabel(entry.minutes) : '', placeholder: 'mm:ss' })) : ''}
     ${field('Note', textInput('note', { value: isNew ? '' : entry.note || '', maxlength: 200 }))}
     <div class="btns">
@@ -358,7 +376,7 @@ function rangeCard(ui: UiState): string {
 function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: string, win: RangeWindow): string {
   const x = T.exerciseStats(state, ex, en);
   const shown = x.entries.filter((e) => (!win.from || e.date >= win.from) && (!win.to || e.date <= win.to));
-  const period = T.periodTotals(x.entries, ex.id, today);
+  const period = T.periodTotals(state.log, ex.id, today);
   const pace = ex.tracksTime ? T.paceStats(x.entries) : null;
   const paceGrid = pace
     ? statGrid([

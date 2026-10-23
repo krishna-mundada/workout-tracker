@@ -7,7 +7,7 @@ import { disableReminders, enableReminders, pushSupported } from './push';
 import { createStore } from './store';
 import { detectMilestones } from './milestones';
 import { createSync } from './sync';
-import { blankDraft, celebrationView, entryForm, exerciseForm, templateDraft, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
+import { blankDraft, celebrationView, entryForm, exerciseForm, extraForm, templateDraft, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
 import './styles.css';
 
 // ---------- setup ----------
@@ -216,6 +216,18 @@ const actions: Record<string, Action> = {
     store.replace(next, 'first setup');
   },
 
+  addExtra: () => openModal(extraForm(store.state, T.todayISO())),
+  saveExtra: () => {
+    const f = readForm(must('#modal'));
+    const exId = Number(text(f, 'exId'));
+    const amount = numberOrThrow(text(f, 'actual'));
+    store.mutate((s) => T.logExtra(s, { exId, actual: amount, date: text(f, 'date') || T.todayISO(), note: text(f, 'note') }), 'logging extra');
+    closeModal();
+    const ex = T.getEx(store.state, exId);
+    const surplus = ex ? T.exerciseStats(store.state, ex).surplus : 0;
+    toast(`Logged ${fmt(amount)} extra${ex ? ` ${ex.name}` : ''}. Backlog now ${surplus > 0 ? '+' : ''}${fmt(surplus)}.`);
+    buzz(40);
+  },
   addExercise: () => openModal(exerciseForm(store.state)),
   editExercise: (el) => {
     const ex = T.getEx(store.state, Number(el.dataset.id));
@@ -467,11 +479,28 @@ window.addEventListener('appinstalled', () => {
   render();
 });
 
+// ---------- day rollover ----------
+
+/** Close out a session left open from an earlier day so its shortfall lands in the backlog. */
+function settleDay(): void {
+  const pending = store.state.pending;
+  if (!pending || pending.date >= T.todayISO()) return;
+  const entry = store.mutate((s) => T.settleStale(s, T.todayISO()), 'closing an unfinished session');
+  if (!entry) return;
+  const done = T.enrich(store.state).find((e) => e.id === entry.id);
+  if (done) toast(`Closed ${done.name} from ${done.date} at ${fmt(done.actual)} of ${fmt(done.target)} (${done.delta > 0 ? '+' : ''}${fmt(done.delta)} to backlog).`);
+}
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') settleDay();
+});
+setInterval(settleDay, 60_000);
+
 // ---------- boot ----------
 
 void navigator.storage?.persist?.().catch(() => {});
 if ('serviceWorker' in navigator && /^https?:$/.test(location.protocol)) {
   navigator.serviceWorker.register('/sw.js').catch(() => {});
 }
+settleDay();
 render();
 void sync.init();

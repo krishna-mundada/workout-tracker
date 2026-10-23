@@ -8,7 +8,7 @@ const VAPID_PUBLIC = 'BLLSB4yxKbdVcNqEnPi8pJd9vebDebbTzPDV1Y44MO3VowE70_49SWaIho
 
 interface Cycle { n: number; start: number; step: number }
 interface Exercise { id: number; name: string; unit: string; active: boolean; cycles: Cycle[] }
-interface Entry { id: number; date: string; exId: number; cycle: number; advance: boolean }
+interface Entry { id: number; date: string; exId: number; cycle: number; advance: boolean; extra?: boolean }
 interface State { exercises: Exercise[]; log: Entry[] }
 
 /** Local date (YYYY-MM-DD) and hour in a time zone. */
@@ -25,7 +25,7 @@ function localNow(tz: string, now = new Date()): { date: string; hour: number } 
 function nextExercise(state: State): Exercise | null {
   const active = state.exercises.filter((e) => e.active);
   if (!active.length) return null;
-  const log = [...state.log].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id));
+  const log = state.log.filter((l) => !l.extra).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id));
   const lastId = log.at(-1)?.exId;
   if (lastId === undefined) return active[0];
   const idx = active.findIndex((e) => e.id === lastId);

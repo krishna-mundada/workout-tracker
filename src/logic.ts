@@ -148,6 +148,7 @@ export function migrate(obj: any): State {
       ts: l.ts || 0,
       ...(Array.isArray(l.sets) && l.sets.length > 1 ? { sets: l.sets.map(Number) } : {}),
       ...(Number(l.minutes) > 0 ? { minutes: Number(l.minutes) } : {}),
+      ...(l.extra === true ? { extra: true } : {}),
     });
   }
 
@@ -184,6 +185,7 @@ export function enrich(state: State): EnrichedEntry[] {
   return sortedLog(state).map((entry) => {
     const ex = getEx(state, entry.exId);
     if (!ex) return { ...entry, name: '(deleted)', unit: '', color: paletteColor(0), target: entry.actual, delta: 0 };
+    if (entry.extra) return { ...entry, name: ex.name, unit: ex.unit, color: ex.color, target: 0, delta: entry.actual };
     const key = `${entry.exId}:${entry.cycle}`;
     const done = counts.get(key) || 0;
     const cycle = cycleOf(ex, entry.cycle);
@@ -204,13 +206,14 @@ export function currentTarget(state: State, ex: Exercise): number {
 }
 
 export function exerciseStats(state: State, ex: Exercise, enriched: EnrichedEntry[] = enrich(state)): ExerciseStats {
-  const entries = enriched.filter((e) => e.exId === ex.id);
+  const all = enriched.filter((e) => e.exId === ex.id);
+  const entries = all.filter((e) => !e.extra); // real sessions: extras only move totals and backlog
   const cycle = currentCycle(ex);
   return {
     entries,
     sessions: entries.length,
-    total: r(entries.reduce((sum, e) => sum + e.actual, ex.lifetimeOffset || 0)),
-    surplus: r(entries.reduce((sum, e) => sum + e.delta, ex.backlogOffset || 0)),
+    total: r(all.reduce((sum, e) => sum + e.actual, ex.lifetimeOffset || 0)),
+    surplus: r(all.reduce((sum, e) => sum + e.delta, ex.backlogOffset || 0)),
     best: entries.reduce((max, e) => Math.max(max, e.actual), 0),
     target: currentTarget(state, ex),
     step: cycle.step,
@@ -266,7 +269,7 @@ export function paceStats(entries: LogEntry[]): PaceStats | null {
 export function nextExercise(state: State): Exercise | null {
   const active = activeList(state);
   if (!active.length) return null;
-  const log = sortedLog(state);
+  const log = sortedLog(state).filter((l) => !l.extra); // extras never move the rotation
   if (!log.length) return active[0];
 
   const lastId = log[log.length - 1].exId;
@@ -535,6 +538,21 @@ export function finishSession(state: State, { date, advance, note, minutes }: { 
   if (p.sets.length > 1) entry.sets = [...p.sets];
   state.pending = null;
   return entry;
+}
+
+/** Extra work on any exercise, e.g. paying back a backlog. Credits the backlog; no target or rotation change. */
+export function logExtra(state: State, { exId, actual, date, note }: { exId: number; actual: number | string; date?: string; note?: string }): LogEntry {
+  if (requireNumber(actual, 'Amount') <= 0) throw new Error('Enter more than 0.');
+  const entry = logSession(state, { exId, actual, date, note, advance: false });
+  entry.extra = true;
+  return entry;
+}
+
+/** A session left open from an earlier day is closed as it stands, so the shortfall lands in the backlog. */
+export function settleStale(state: State, today: string): LogEntry | null {
+  const p = state.pending;
+  if (!p || p.date >= today) return null;
+  return finishSession(state, { note: 'Closed automatically at the end of the day' });
 }
 
 export function editEntry(state: State, id: number, patch: Partial<Pick<SessionInput, 'actual' | 'date' | 'advance' | 'note' | 'minutes'>>): LogEntry {

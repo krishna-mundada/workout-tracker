@@ -300,3 +300,36 @@ describe('custom routines', () => {
     expect(s.exercises).toHaveLength(4);
   });
 });
+
+describe('extra work and day rollover', () => {
+  it('extra work pays down the backlog without touching targets or rotation', () => {
+    const s = fresh();
+    const crunches = s.exercises[2]!;
+    logNext(s, '2026-10-01', 10); // push-ups, -10
+    const nextBefore = name(s);
+    const targetBefore = T.currentTarget(s, crunches);
+    T.updateExercise(s, crunches.id, { backlog: '-60' });
+    T.logExtra(s, { exId: crunches.id, actual: 25, date: '2026-10-02' });
+    const stats = T.exerciseStats(s, crunches);
+    expect(stats.surplus).toBe(-35);
+    expect(stats.total).toBe(25);
+    expect(stats.sessions).toBe(0);
+    expect(T.currentTarget(s, crunches)).toBe(targetBefore);
+    expect(name(s)).toBe(nextBefore);
+    expect(() => T.logExtra(s, { exId: crunches.id, actual: 0 })).toThrow();
+    const back = T.migrate(JSON.parse(JSON.stringify(s)));
+    expect(T.exerciseStats(back, back.exercises[2]!).surplus).toBe(-35);
+  });
+
+  it('closes a session left open from an earlier day as a short session', () => {
+    const s = fresh();
+    const id = next(s).id;
+    T.addSet(s, { exId: id, amount: 15, date: '2026-10-23' });
+    expect(T.settleStale(s, '2026-10-23')).toBeNull();
+    const entry = T.settleStale(s, '2026-10-24')!;
+    expect([entry.actual, entry.date]).toEqual([15, '2026-10-23']);
+    expect(T.enrich(s)[0]!.delta).toBe(-5);
+    expect(s.pending).toBeNull();
+    expect(name(s)).toBe('Squats');
+  });
+});

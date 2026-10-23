@@ -38,6 +38,8 @@ export interface LogEntry {
   sets?: number[];
   /** Duration in minutes, for exercises that track time (runs). */
   minutes?: number;
+  /** Extra work outside the rotation (catching up on a backlog). Counts toward totals and backlog only. */
+  extra?: boolean;
 }
 
 export interface Settings {

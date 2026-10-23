@@ -5,9 +5,10 @@
 //   install - { standalone, canPrompt, ios, dismissed }
 import * as T from './logic';
 import type { EnrichedEntry, Exercise, ExerciseStats, State, Streaks } from './types';
+import type { Milestone } from './milestones';
 import type { SnapshotInfo } from './store';
 import type { SyncView } from './sync';
-import { PLAN, CONFIG, CLOUD, colorOf, tracksTime } from './config';
+import { PLAN, CONFIG, CLOUD, colorOf, quickSetsOf, tracksTime } from './config';
 
 const CONFIG_REMINDER_HOURS = CLOUD.reminderHours;
 const CONFIG_DEFAULT_HOUR = CLOUD.defaultReminderHour;
@@ -29,7 +30,12 @@ export interface UiState {
   override: number | null; // exercise picked by hand instead of the rotation
   optOpen: boolean;
   histAll: boolean;
+  range: Range;
+  from: string;
+  to: string;
 }
+
+export type Range = '30' | '90' | 'all' | 'custom';
 
 export type Theme = 'light' | 'dark' | 'auto';
 
@@ -107,8 +113,9 @@ export function viewToday(ctx: ViewCtx): string {
     doneBanner(
       en.filter((e) => e.date === today),
       streak,
+      T.isRestDay(state, today),
     ),
-    hero({ ex, stats: T.exerciseStats(state, ex, en), ui, today, doneToday: streak.todayDone, options: active, sets: state.pending?.sets ?? [], date: state.pending?.date ?? today }),
+    hero({ ex, stats: T.exerciseStats(state, ex, en), ui, today, doneToday: streak.todayDone, options: active, sets: state.pending?.sets ?? [], date: state.pending?.date ?? today, canRest: !streak.todayDone && !state.pending }),
     card(
       statGrid([
         { value: streak.current, label: 'day streak', color: 'var(--c1)' },
@@ -126,7 +133,7 @@ export function viewToday(ctx: ViewCtx): string {
   ].join('');
 }
 
-function hero({ ex, stats, ui, today, doneToday, options, sets, date }: {
+function hero({ ex, stats, ui, today, doneToday, options, sets, date, canRest }: {
   ex: Exercise;
   stats: ExerciseStats;
   ui: UiState;
@@ -135,6 +142,7 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date }: {
   options: Exercise[];
   sets: number[];
   date: string;
+  canRest: boolean;
 }): string {
   const { target, last } = stats;
   const done = T.r(sets.reduce((a, b) => a + b, 0));
@@ -155,6 +163,11 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date }: {
        <div class="sets">${sets.map((n, i) => `<button class="set" data-act="removeSet" data-i="${i}" aria-label="remove set">${fmt(n)} &times;</button>`).join('')}</div>`
     : '';
 
+  const quick = [...new Set([...quickSetsOf(ex.name).filter((n) => n < remaining || !inProgress), ...(remaining > 0 && inProgress ? [remaining] : [])])];
+  const chips = remaining > 0 || !inProgress
+    ? `<div class="quick">${quick.map((n) => button(`+${fmt(n)}`, 'quickSet', { cls: 'qs', data: { ex: ex.id, n } })).join('')}</div>`
+    : '';
+
   const finishLabel = remaining > 0 ? `Finish early at ${fmt(done)}` : `Finish ${ex.name}`;
   const buttons = inProgress
     ? (remaining > 0
@@ -170,6 +183,7 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date }: {
       <div class="target"><b>${fmt(target)}</b><span>${esc(ex.unit)}</span></div>
       <div class="muted small">${lastLine}</div>
       ${progress}
+      ${chips}
       <div class="stepper">
         <button class="sq" data-act="dec" aria-label="less">-</button>
         ${textInput('actual', { value: suggested, mode: 'decimal', extra: `data-step="${setStepOf(ex)}"` })}
@@ -184,6 +198,7 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date }: {
         ${tracksTime(ex.name) ? field('Time (optional, like 28:30)', textInput('minutes', { placeholder: 'mm:ss' })) : ''}
         ${field('Note', textInput('note', { maxlength: 200 }))}
       </details>
+      ${canRest ? button('Take a rest day', 'restDay', { cls: 'link' }) : ''}
     </div>`,
     { cls: 'hero', style: exStyle(ex.name) },
   );
@@ -216,8 +231,9 @@ function backupBanner(state: State, now: number): string {
   return banner(`No backup in ${age}. ${quietButton('Back up', 'tab', { tab: 'more' })}`);
 }
 
-function doneBanner(todays: EnrichedEntry[], streak: Streaks): string {
+function doneBanner(todays: EnrichedEntry[], streak: Streaks, rest: boolean): string {
   if (!streak.todayDone) return '';
+  if (rest) return banner(`Rest day. Your streak is safe. ${quietButton('Undo', 'undoRest', {})}`, 'ok');
   if (!todays.length) return banner('Today is covered by your streak.', 'ok');
   return banner(`Done today: ${todays.map((e) => `${esc(e.name)} ${amount(e.actual, e.unit)}`).join(', ')}`, 'ok');
 }
@@ -280,15 +296,38 @@ export function entryForm({ state, today }: Pick<ViewCtx, 'state' | 'today'>, en
 
 // ---------- progress ----------
 
-export function viewProgress({ state, en, today }: ViewCtx): string {
+export function viewProgress({ state, en, today, ui }: ViewCtx): string {
+  const win = rangeWindow(ui, today, en);
   const heat = T.activityGrid(state, today, CONFIG.heatmapWeeks)
-    .map((week) => week.map((c) => `<div class="cell${c.future ? ' future' : c.done ? ' on' : ''}" title="${c.date}"></div>`).join(''))
+    .map((week) => week.map((c) => `<div class="cell${c.future ? ' future' : c.rest ? ' rest' : c.done ? ' on' : ''}" title="${c.date}"></div>`).join(''))
     .join('');
-  return card(`<h2>Last ${CONFIG.heatmapWeeks} weeks</h2><div class="heat">${heat}</div>`) + state.exercises.map((ex) => exerciseCard(state, ex, en, today)).join('');
+  return card(`<h2>Last ${CONFIG.heatmapWeeks} weeks</h2><div class="heat">${heat}</div>`) + rangeCard(ui) + state.exercises.map((ex) => exerciseCard(state, ex, en, today, win)).join('');
 }
 
-function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: string): string {
+export interface RangeWindow {
+  from: string | null;
+  to: string | null;
+}
+
+/** The date window the charts show. 'all' leaves both ends open. */
+export function rangeWindow(ui: UiState, today: string, _en: EnrichedEntry[]): RangeWindow {
+  if (ui.range === 'all') return { from: null, to: null };
+  if (ui.range === 'custom') return { from: ui.from || null, to: ui.to || null };
+  return { from: T.addDays(today, -(Number(ui.range) - 1)), to: today };
+}
+
+function rangeCard(ui: UiState): string {
+  const chips: [Range, string][] = [['30', '30 days'], ['90', '90 days'], ['all', 'All time'], ['custom', 'Dates']];
+  const custom =
+    ui.range === 'custom'
+      ? `<div class="two" id="rangeForm" style="margin-top:10px">${field('From', `<input type="date" data-f="from" value="${esc(ui.from)}">`)}${field('To', `<input type="date" data-f="to" value="${esc(ui.to)}">`)}</div>`
+      : '';
+  return `<div class="rangebar">${chips.map(([r, label]) => button(label, 'range', { cls: r === ui.range ? 'primary' : 'ghost', data: { range: r } })).join('')}</div>${custom}`;
+}
+
+function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: string, win: RangeWindow): string {
   const x = T.exerciseStats(state, ex, en);
+  const shown = x.entries.filter((e) => (!win.from || e.date >= win.from) && (!win.to || e.date <= win.to));
   const period = T.periodTotals(x.entries, ex.id, today);
   const pace = tracksTime(ex.name) ? T.paceStats(x.entries) : null;
   const paceGrid = pace
@@ -299,9 +338,9 @@ function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: st
       ])
     : '';
   const chart =
-    x.entries.length >= 2
-      ? `<div class="chartbox">${chartSvg(x.entries)}</div><p class="muted small" style="margin:8px 0 0">Solid: what you did. Dashed: target.</p>`
-      : '<p class="muted small">Log two sessions to see the chart.</p>';
+    shown.length >= 2
+      ? `<div class="chartbox">${chartSvg(shown, win)}</div><p class="muted small" style="margin:8px 0 0">Solid: what you did. Dashed: target.</p>`
+      : '<p class="muted small">Not enough sessions in this range for a chart.</p>';
   return card(
     `<div class="row"><h2 style="margin:0">${exLabel(ex.name)}</h2>${chip(x.surplus, ex.unit)}</div>
      <div style="margin:14px 0">${statGrid([
@@ -319,11 +358,15 @@ function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: st
   );
 }
 
-/** Line chart of what was done against the target, last N sessions. */
-function chartSvg(entries: EnrichedEntry[]): string {
+/** Line chart over calendar dates: what was done against the target. */
+function chartSvg(entries: EnrichedEntry[], win: RangeWindow): string {
   const { width: W, height: H, padLeft: pl, padRight: pr, padTop: pt, padBottom: pb, maxPoints, dotsUpTo } = CONFIG.chart;
   const es = entries.slice(-maxPoints);
   const n = es.length;
+  const start = win.from ?? (es[0] as EnrichedEntry).date;
+  const end = win.to ?? (es[n - 1] as EnrichedEntry).date;
+  const span = Math.max(1, T.diffDays(start, end));
+
   const values = es.flatMap((e) => [e.actual, e.target]);
   let min = Math.min(...values);
   let max = Math.max(...values);
@@ -335,23 +378,44 @@ function chartSvg(entries: EnrichedEntry[]): string {
   min -= margin;
   max += margin;
 
-  const x = (i: number): number => pl + (n === 1 ? 0.5 : i / (n - 1)) * (W - pl - pr);
-  const y = (v: number): number => pt + (1 - (v - min) / (max - min)) * (H - pt - pb);
-  const path = (key: 'actual' | 'target'): string => es.map((e, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)} ${y(e[key]).toFixed(1)}`).join(' ');
+  const x = (date: string): number => pl + Math.min(1, Math.max(0, T.diffDays(start, date) / span)) * (W - pl - pr);
+  const y = (val: number): number => pt + (1 - (val - min) / (max - min)) * (H - pt - pb);
+  const path = (key: 'actual' | 'target'): string => es.map((e, i) => `${i ? 'L' : 'M'}${x(e.date).toFixed(1)} ${y(e[key]).toFixed(1)}`).join(' ');
 
   const grid = [min + margin, (min + max) / 2, max - margin]
     .map(
-      (v) =>
-        `<line class="gl" x1="${pl}" x2="${W - pr}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/>` +
-        `<text class="ax" x="${pl - 6}" y="${(y(v) + 3).toFixed(1)}" text-anchor="end">${fmt(v)}</text>`,
+      (val) =>
+        `<line class="gl" x1="${pl}" x2="${W - pr}" y1="${y(val).toFixed(1)}" y2="${y(val).toFixed(1)}"/>` +
+        `<text class="ax" x="${pl - 6}" y="${(y(val) + 3).toFixed(1)}" text-anchor="end">${fmt(val)}</text>`,
     )
     .join('');
-  const dots = n <= dotsUpTo ? es.map((e, i) => `<circle class="dot" cx="${x(i).toFixed(1)}" cy="${y(e.actual).toFixed(1)}" r="2.6"/>`).join('') : '';
+  const ticks = [0, 0.5, 1]
+    .map((f) => {
+      const date = T.addDays(start, Math.round(span * f));
+      const anchor = f === 0 ? 'start' : f === 1 ? 'end' : 'middle';
+      return `<text class="ax" x="${(pl + f * (W - pl - pr)).toFixed(1)}" y="${H - 4}" text-anchor="${anchor}">${shortDate(date)}</text>`;
+    })
+    .join('');
+  const dots = n <= dotsUpTo ? es.map((e) => `<circle class="dot" cx="${x(e.date).toFixed(1)}" cy="${y(e.actual).toFixed(1)}" r="2.6"/>`).join('') : '';
 
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Amount per session against target">${grid}
-    <path class="lt" d="${path('target')}"/><path class="la" d="${path('actual')}"/>${dots}
-    <text class="ax" x="${pl}" y="${H - 4}">${shortDate(es[0].date)}</text>
-    <text class="ax" x="${W - pr}" y="${H - 4}" text-anchor="end">${shortDate(es[n - 1].date)}</text></svg>`;
+    <path class="lt" d="${path('target')}"/><path class="la" d="${path('actual')}"/>${dots}${ticks}</svg>`;
+}
+
+/** Full-screen party shown when a session hits something worth cheering. */
+export function celebrationView(milestones: Milestone[]): string {
+  const colors = ['#ff4f7b', '#ff8a1f', '#ffb81c', '#18c5e8', '#9b6bff', '#3df5a0'];
+  const confetti = Array.from({ length: 28 }, (_, i) => {
+    const left = (i * 37) % 100;
+    const delay = ((i * 13) % 20) / 10;
+    const dur = 2.4 + ((i * 7) % 15) / 10;
+    return `<i class="confetti" style="left:${left}%;background:${colors[i % colors.length]};animation-delay:${delay}s;animation-duration:${dur}s"></i>`;
+  }).join('');
+  return `<div class="party">${confetti}</div>
+    <div class="cheer">${milestones
+      .map((m) => `<div class="cheer-item"><div class="cheer-icon">${m.icon}</div><h2>${esc(m.title)}</h2><p>${esc(m.text)}</p></div>`)
+      .join('')}
+    ${button('Keep going!', 'closeModal', { cls: 'primary' })}</div>`;
 }
 
 // ---------- backup ----------

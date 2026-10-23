@@ -251,3 +251,24 @@ describe('run time, pace and period totals', () => {
     expect(T.periodTotals(s.log, id, '2026-10-22')).toEqual({ week: 15, lastWeek: 10, month: 29 });
   });
 });
+
+describe('rest days', () => {
+  it('keep the streak alive without a session or rotation change', () => {
+    const s = fresh();
+    T.setStreakSeed(s, 5, '2026-10-22');
+    T.markRest(s, '2026-10-22');
+    expect(T.streaks(s, '2026-10-22')).toMatchObject({ current: 6, todayDone: true });
+    expect(name(s)).toBe('Push-ups');
+    T.unmarkRest(s, '2026-10-22');
+    expect(T.streaks(s, '2026-10-22').todayDone).toBe(false);
+  });
+
+  it('survive a backup round trip and show on the calendar grid', () => {
+    const s = fresh();
+    T.markRest(s, '2026-10-21');
+    const back = T.migrate(JSON.parse(JSON.stringify(s)));
+    expect(back.settings.restDays).toEqual(['2026-10-21']);
+    const cell = T.activityGrid(back, '2026-10-22', 2).flat().find((c) => c.date === '2026-10-21');
+    expect(cell).toMatchObject({ done: true, rest: true });
+  });
+});

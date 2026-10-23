@@ -14,6 +14,8 @@ export interface PlanItem {
   step: number;
   /** Stepper size when adding a set. */
   setStep: number;
+  /** One-tap set sizes shown on the Today screen. */
+  quickSets: number[];
   start: number;
   color: string;
   /** Ask for a duration and show pace (minutes per unit). */
@@ -21,10 +23,10 @@ export interface PlanItem {
 }
 
 export const PLAN: PlanItem[] = [
-  { name: 'Push-ups', unit: 'reps', step: 1, setStep: 5, start: 20, color: '#ff4f7b' },
-  { name: 'Squats', unit: 'reps', step: 1, setStep: 5, start: 20, color: '#9b6bff' },
-  { name: 'Crunches', unit: 'reps', step: 1, setStep: 5, start: 20, color: '#ffb81c' },
-  { name: 'Run', unit: 'km', step: 0.1, setStep: 0.5, start: 2, color: '#18c5e8', tracksTime: true },
+  { name: 'Push-ups', unit: 'reps', step: 1, setStep: 5, quickSets: [10, 20], start: 20, color: '#ff4f7b' },
+  { name: 'Squats', unit: 'reps', step: 1, setStep: 5, quickSets: [10, 20], start: 20, color: '#9b6bff' },
+  { name: 'Crunches', unit: 'reps', step: 1, setStep: 5, quickSets: [10, 20], start: 20, color: '#ffb81c' },
+  { name: 'Run', unit: 'km', step: 0.1, setStep: 0.5, quickSets: [1, 2, 5], start: 2, color: '#18c5e8', tracksTime: true },
 ];
 
 export const CONFIG = {
@@ -43,6 +45,8 @@ export const CONFIG = {
 
   chart: { width: 320, height: 150, padLeft: 36, padRight: 10, padTop: 12, padBottom: 22, maxPoints: 120, dotsUpTo: 60 },
 };
+
+export const quickSetsOf = (name: string): number[] => PLAN.find((p) => p.name === name)?.quickSets ?? [];
 
 export const tracksTime = (name: string): boolean => PLAN.find((p) => p.name === name)?.tracksTime === true;
 

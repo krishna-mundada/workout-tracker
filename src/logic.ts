@@ -9,7 +9,7 @@
  *   exercises: [{ id, name, unit, active, lifetimeOffset, backlogOffset,
  *                 cycles: [{ n, start, step, from }] }],   // last cycle is the live plan
  *   log: [{ id, date: 'YYYY-MM-DD', exId, cycle, actual, advance, note, ts }],
- *   settings: { nextId, streakSeed: { days, endDate } | null, lastBackup: ms | null }
+ *   settings: { nextId, streakSeed: { days, endDate } | null, lastBackup: ms | null, restDays: string[] }
  * }
  *
  * Rotation order = order of state.exercises (active ones only).
@@ -79,7 +79,7 @@ export const newState = (): State => ({
   version: 1,
   exercises: [],
   log: [],
-  settings: { nextId: 1, streakSeed: null, lastBackup: null },
+  settings: { nextId: 1, streakSeed: null, lastBackup: null, restDays: [] },
   pending: null,
 });
 
@@ -130,6 +130,7 @@ export function migrate(obj: any): State {
   const st = obj.settings || {};
   s.settings.nextId = Math.max(Number(st.nextId) || 1, maxId + 1);
   s.settings.lastBackup = st.lastBackup || null;
+  s.settings.restDays = Array.isArray(st.restDays) ? [...new Set<string>(st.restDays.filter(isISO))].sort() : [];
   const seed = st.streakSeed;
   s.settings.streakSeed = seed && seed.days > 0 && isISO(seed.endDate) ? { days: Number(seed.days), endDate: seed.endDate } : null;
   const p = obj.pending;
@@ -277,6 +278,7 @@ function trainedDates(state: State): Set<string> {
   const set = new Set<string>(state.log.map((l) => l.date));
   const seed = state.settings.streakSeed;
   if (seed && seed.days > 0) for (let i = 0; i < seed.days; i++) set.add(addDays(seed.endDate, -i));
+  for (const d of state.settings.restDays) set.add(d);
   return set;
 }
 
@@ -320,9 +322,23 @@ export function activityGrid(state: State, today: string, weeks: number): GridCe
   return Array.from({ length: weeks }, (_, w) =>
     Array.from({ length: 7 }, (_, d) => {
       const date = addDays(start, w * 7 + d);
-      return { date, done: set.has(date), count: counts.get(date) || 0, future: date > today };
+      return { date, done: set.has(date), rest: state.settings.restDays.includes(date) && !counts.has(date), count: counts.get(date) || 0, future: date > today };
     }),
   );
+}
+
+// ---------- rest days ----------
+
+export const isRestDay = (state: State, date: string): boolean => state.settings.restDays.includes(date);
+
+/** Mark a day as rest so it keeps the streak going. Does not touch the rotation. */
+export function markRest(state: State, date: string): void {
+  if (!isISO(date)) throw new Error('Pick a valid date.');
+  if (!isRestDay(state, date)) state.settings.restDays = [...state.settings.restDays, date].sort();
+}
+
+export function unmarkRest(state: State, date: string): void {
+  state.settings.restDays = state.settings.restDays.filter((d) => d !== date);
 }
 
 // ---------- mutations ----------

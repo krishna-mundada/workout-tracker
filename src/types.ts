@@ -37,6 +37,8 @@ export interface Settings {
   nextId: number;
   streakSeed: { days: number; endDate: string } | null;
   lastBackup: number | null;
+  /** Days marked as rest: they keep the streak alive without a session. */
+  restDays: string[];
 }
 
 /** A session being built up set by set. It becomes a log entry when finished. */
@@ -85,6 +87,7 @@ export interface Streaks {
 export interface GridCell {
   date: string;
   done: boolean;
+  rest: boolean;
   count: number;
   future: boolean;
 }

@@ -5,9 +5,10 @@ import { fmt } from './format';
 import * as T from './logic';
 import { disableReminders, enableReminders, pushSupported } from './push';
 import { createStore } from './store';
+import { detectMilestones } from './milestones';
 import { createSync } from './sync';
 import type { OnboardingRow } from './types';
-import { entryForm, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
+import { celebrationView, entryForm, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
 import './styles.css';
 
 // ---------- setup ----------
@@ -30,7 +31,7 @@ const store = createStore({
 
 const sync = createSync({ store, config: { ...CLOUD, url: CLOUD.url, publishableKey: CLOUD.publishableKey }, onChange: () => render() });
 
-const ui: UiState = { tab: 'today', override: null, optOpen: false, histAll: false };
+const ui: UiState = { tab: 'today', override: null, optOpen: false, histAll: false, range: '90', from: '', to: '' };
 let installPrompt: InstallPromptEvent | null = null;
 
 // ---------- theme ----------
@@ -182,6 +183,26 @@ const actions: Record<string, Action> = {
     buzz();
     toast(`Added ${fmt(amount)}`, { label: 'Undo', run: () => store.mutate((s) => T.removeSet(s, (s.pending?.sets.length ?? 1) - 1), 'removing a set') });
   },
+  quickSet: (el) => {
+    const exId = Number(el.dataset.ex);
+    const amount = Number(el.dataset.n);
+    const form = readForm(must('#logForm'));
+    store.mutate((s) => T.addSet(s, { exId, amount, date: text(form, 'date') || T.todayISO() }), 'adding a set');
+    buzz();
+  },
+  restDay: () => {
+    store.mutate((s) => T.markRest(s, T.todayISO()), 'taking a rest day');
+    toast('Rest day. Streak safe.');
+  },
+  undoRest: () => store.mutate((s) => T.unmarkRest(s, T.todayISO()), 'undoing a rest day'),
+  range: (el) => {
+    ui.range = (el.dataset.range as UiState['range']) ?? '90';
+    if (ui.range === 'custom' && !ui.from) {
+      ui.from = T.addDays(T.todayISO(), -29);
+      ui.to = T.todayISO();
+    }
+    render();
+  },
   removeSet: (el) => store.mutate((s) => T.removeSet(s, Number(el.dataset.i)), 'removing a set'),
   discardSets: () => {
     if (confirmed('Throw away the sets so far?')) store.mutate(T.discardSets, 'discarding sets');
@@ -190,9 +211,15 @@ const actions: Record<string, Action> = {
     const form = readForm(must('#logForm'));
     const exId = store.state.pending?.exId;
     const ex = exId === undefined ? null : T.getEx(store.state, exId);
+    const before = store.state;
     const entry = store.mutate((s) => T.finishSession(s, { date: text(form, 'date') || undefined, advance: !form.hold, note: text(form, 'note'), minutes: text(form, 'minutes') }), 'finishing a session');
     buzz(40);
     ui.override = null;
+    const cheers = detectMilestones(before, store.state, entry, T.todayISO());
+    if (cheers.length) {
+      openModal(celebrationView(cheers));
+      return;
+    }
     toast(`Logged ${ex?.name ?? 'session'} ${fmt(entry.actual)}${unitLabel(ex?.unit ?? 'reps')}`, {
       label: 'Undo',
       run: () => store.mutate((s) => T.deleteEntry(s, entry.id), 'undoing a session'),
@@ -327,7 +354,11 @@ document.addEventListener('click', (e) => {
 
 document.addEventListener('change', (e) => {
   const el = e.target as HTMLInputElement | HTMLSelectElement;
-  if (el.dataset.f === 'exId' && el.closest('#logForm')) {
+  if ((el.dataset.f === 'from' || el.dataset.f === 'to') && el.closest('#rangeForm')) {
+    if (el.dataset.f === 'from') ui.from = el.value;
+    else ui.to = el.value;
+    render();
+  } else if (el.dataset.f === 'exId' && el.closest('#logForm')) {
     ui.override = Number(el.value);
     ui.optOpen = true;
     render();

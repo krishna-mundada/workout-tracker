@@ -129,3 +129,23 @@ textarea{min-height:140px;font:12px ui-monospace,monospace}
     --good:#3df5a0; --goodbg:#0d3b2c; --bad:#ff9a5c; --badbg:#47210f;
   }
 }
+
+/* quick sets, rest day */
+.quick{display:flex;gap:8px;margin:14px 0 0}
+.qs{flex:1;padding:12px 0;border:0;border-radius:14px;background:rgba(255,255,255,.78);color:var(--btn-ink);font-size:1.15rem;font-weight:900}
+.qs:active{background:#fff;transform:scale(.97)}
+.cell.rest{background:color-mix(in srgb,var(--c3) 55%,var(--line))}
+.rangebar{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;margin-bottom:14px}
+.rangebar button{padding:10px 2px;font-size:.85rem;border-radius:12px}
+
+/* celebration */
+.party{position:fixed;inset:0;pointer-events:none;overflow:hidden;z-index:40}
+.confetti{position:absolute;top:-14px;width:10px;height:16px;border-radius:3px;animation:fall linear infinite}
+@keyframes fall{to{transform:translateY(110vh) rotate(540deg)}}
+.cheer{text-align:center}
+.cheer-item{margin-bottom:14px}
+.cheer-icon{font-size:3.4rem;line-height:1.1;animation:pop .5s ease-out}
+.cheer h2{font-size:1.5rem;margin:6px 0}
+.cheer p{color:var(--muted)}
+@keyframes pop{0%{transform:scale(.3)}70%{transform:scale(1.25)}100%{transform:scale(1)}}
+@media (prefers-reduced-motion:reduce){.confetti,.cheer-icon{animation:none}.confetti{display:none}}

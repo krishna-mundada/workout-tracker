@@ -12,6 +12,13 @@ export interface Exercise {
   name: string;
   unit: string;
   active: boolean;
+  color: string;
+  /** Stepper size when adding a set. */
+  setStep: number;
+  /** One-tap set sizes on the Today screen. */
+  quickSets: number[];
+  /** Ask for a duration and show pace. */
+  tracksTime: boolean;
   lifetimeOffset: number;
   backlogOffset: number;
   /** Plan versions; the last one is live. */
@@ -60,6 +67,7 @@ export interface State {
 export interface EnrichedEntry extends LogEntry {
   name: string;
   unit: string;
+  color: string;
   target: number;
   delta: number;
 }
@@ -92,11 +100,3 @@ export interface GridCell {
   future: boolean;
 }
 
-export interface OnboardingRow {
-  name: string;
-  unit?: string;
-  start: number | string;
-  step?: number | string;
-  lifetime?: number | string;
-  backlog?: number | string;
-}

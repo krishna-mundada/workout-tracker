@@ -1,5 +1,5 @@
 // Entry point: wires the store, the views and the DOM. Rules live in logic.ts, markup in views.ts.
-import { CLOUD, CONFIG, PLAN } from './config';
+import { CLOUD, CONFIG } from './config';
 import { $, $$, buzz, closeModal, download, must, openModal, readForm, readRows, text, toast } from './dom';
 import { fmt } from './format';
 import * as T from './logic';
@@ -7,8 +7,7 @@ import { disableReminders, enableReminders, pushSupported } from './push';
 import { createStore } from './store';
 import { detectMilestones } from './milestones';
 import { createSync } from './sync';
-import type { OnboardingRow } from './types';
-import { celebrationView, entryForm, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
+import { blankDraft, celebrationView, entryForm, exerciseForm, templateDraft, viewHistory, viewMore, viewOnboarding, viewProgress, viewToday, type Theme, type UiState, type ViewCtx } from './views';
 import './styles.css';
 
 // ---------- setup ----------
@@ -31,7 +30,7 @@ const store = createStore({
 
 const sync = createSync({ store, config: { ...CLOUD, url: CLOUD.url, publishableKey: CLOUD.publishableKey }, onChange: () => render() });
 
-const ui: UiState = { tab: 'today', override: null, optOpen: false, histAll: false, range: '90', from: '', to: '' };
+const ui: UiState = { tab: 'today', override: null, optOpen: false, histAll: false, range: '90', from: '', to: '', draft: null, draftFirst: 0 };
 let installPrompt: InstallPromptEvent | null = null;
 
 // ---------- theme ----------
@@ -93,7 +92,7 @@ function render(): void {
   const nav = must('#tabs');
   if (!store.state.exercises.length) {
     nav.hidden = true;
-    app.innerHTML = viewOnboarding();
+    app.innerHTML = viewOnboarding(ui);
     return;
   }
   nav.hidden = false;
@@ -135,6 +134,20 @@ async function authenticate(kind: 'signIn' | 'signUp'): Promise<void> {
   await (kind === 'signIn' ? sync.signIn(email, password) : sync.signUp(email, password));
 }
 
+/** Copy what is typed on the first-run screen back into ui.draft before it is re-rendered. */
+function syncDraft(): void {
+  const form = $('#obForm');
+  if (!form || !ui.draft) return;
+  const rows = $$('.ob-row', form);
+  ui.draft = ui.draft.map((d, i) => {
+    const row = rows[i];
+    if (!row) return d;
+    const f = readForm(row);
+    return { ...d, name: text(f, 'name'), unit: text(f, 'unit'), step: text(f, 'step'), start: text(f, 'target'), lifetime: text(f, 'lifetime'), backlog: text(f, 'backlog') };
+  });
+  ui.draftFirst = Number($<HTMLInputElement>('input[name=first]:checked', form)?.value ?? 0);
+}
+
 // ---------- actions (data-act="name") ----------
 
 type Action = (el: HTMLElement) => void | Promise<void>;
@@ -154,26 +167,93 @@ const actions: Record<string, Action> = {
     render();
   },
 
+  pickTemplate: () => {
+    ui.draft = templateDraft();
+    ui.draftFirst = 0;
+    render();
+  },
+  pickBlank: () => {
+    ui.draft = [blankDraft(0)];
+    ui.draftFirst = 0;
+    render();
+  },
+  addDraft: () => {
+    syncDraft();
+    ui.draft = [...(ui.draft ?? []), blankDraft(ui.draft?.length ?? 0)];
+    render();
+  },
+  removeDraft: (el) => {
+    syncDraft();
+    const i = Number(el.dataset.i);
+    ui.draft = (ui.draft ?? []).filter((_, k) => k !== i);
+    ui.draftFirst = Math.min(ui.draftFirst, Math.max(0, ui.draft.length - 1));
+    render();
+  },
   start: () => {
-    const rows: OnboardingRow[] = $$('.ob-row', must('#obForm')).map((row, i) => {
-      const plan = PLAN[i];
-      if (!plan) throw new Error('Unexpected row.');
-      const f = readForm(row);
-      return {
-        name: plan.name,
-        unit: plan.unit,
-        step: plan.step,
-        start: numberOrThrow(text(f, 'target'), `Enter a next target for ${plan.name}.`),
-        lifetime: text(f, 'lifetime'),
-        backlog: text(f, 'backlog'),
-      };
-    });
-    const first = Number($<HTMLInputElement>('input[name=first]:checked')?.value ?? 0);
+    syncDraft();
+    const draft = ui.draft ?? [];
+    const pairs = draft
+      .filter((d) => d.name.trim())
+      .map((d) => ({
+        draft: d,
+        row: {
+          name: d.name.trim(),
+          unit: d.unit.trim() || 'reps',
+          step: numberOrThrow(d.step, `Set how much ${d.name.trim()} goes up by.`),
+          start: numberOrThrow(d.start, `Enter a next target for ${d.name.trim()}.`),
+          lifetime: d.lifetime,
+          backlog: d.backlog,
+          color: d.color,
+        },
+      }));
+    if (!pairs.length) throw new Error('Add at least one exercise.');
+    if (pairs.some((p) => p.row.step <= 0)) throw new Error('"Goes up by" must be more than 0.');
+    const firstRow = pairs.find((p) => p.draft === draft[ui.draftFirst])?.row;
     const streakDays = text(readForm(must('#obForm')), 'streak');
-    const next = T.setupFromOnboarding(T.newState(), { rows, firstIndex: first, streakDays });
+    const next = T.setupFromOnboarding(T.newState(), { rows: pairs.map((p) => p.row), firstRow, streakDays });
     ui.tab = 'today';
+    ui.draft = null;
     store.replace(next, 'first setup');
   },
+
+  addExercise: () => openModal(exerciseForm(store.state)),
+  editExercise: (el) => {
+    const ex = T.getEx(store.state, Number(el.dataset.id));
+    if (ex) openModal(exerciseForm(store.state, ex));
+  },
+  saveExercise: (el) => {
+    const f = readForm(must('#modal'));
+    const id = el.dataset.id ? Number(el.dataset.id) : null;
+    const name = text(f, 'name').trim();
+    if (!name) throw new Error('Give the exercise a name.');
+    const step = numberOrThrow(text(f, 'step'), 'Enter how much it goes up by.');
+    const target = numberOrThrow(text(f, 'target'), 'Enter a target.');
+    if (step <= 0) throw new Error('"Goes up by" must be more than 0.');
+    const unit = text(f, 'unit').trim() || 'reps';
+    const color = text(f, 'color');
+    if (id === null) {
+      store.mutate(
+        (s) => T.addExercise(s, { name, unit, step, start: target, color, tracksTime: !!f.time, lifetime: text(f, 'lifetime'), backlog: text(f, 'backlog') }),
+        'adding an exercise',
+      );
+    } else {
+      store.mutate((s) => {
+        const ex = T.getEx(s, id);
+        if (!ex) throw new Error('Exercise not found.');
+        const changedPlan = T.currentTarget(s, ex) !== T.r(target) || T.currentCycle(ex).step !== T.r(step);
+        T.updateExercise(s, id, { name, unit, color, tracksTime: !!f.time, active: !!f.active });
+        if (changedPlan) T.resetPlan(s, id, { start: target, step });
+      }, 'editing an exercise');
+    }
+    closeModal();
+  },
+  deleteExercise: (el) => {
+    if (!confirmed('Delete this exercise?')) return;
+    store.mutate((s) => T.deleteExercise(s, Number(el.dataset.id)), 'deleting an exercise');
+    closeModal();
+  },
+  moveUp: (el) => store.mutate((s) => T.moveExercise(s, Number(el.dataset.id), -1), 'reordering'),
+  moveDown: (el) => store.mutate((s) => T.moveExercise(s, Number(el.dataset.id), 1), 'reordering'),
 
   addSet: (el) => {
     const exId = Number(el.dataset.ex);

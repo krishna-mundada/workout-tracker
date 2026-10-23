@@ -272,3 +272,31 @@ describe('rest days', () => {
     expect(cell).toMatchObject({ done: true, rest: true });
   });
 });
+
+describe('custom routines', () => {
+  it('gives new exercises sensible defaults and keeps legacy data on the template colours', () => {
+    const s = T.newState();
+    T.addExercise(s, { name: 'Plank', unit: 'sec', start: 30, step: 5 });
+    T.addExercise(s, { name: 'Pull-ups', unit: 'reps', start: 3, step: 1 });
+    expect(s.exercises[0]).toMatchObject({ unit: 'sec', setStep: 1, tracksTime: false });
+    expect(s.exercises[1]).toMatchObject({ quickSets: [10, 20], setStep: 5 });
+    expect(s.exercises[0]!.color).not.toBe(s.exercises[1]!.color);
+
+    const legacy = JSON.parse(JSON.stringify(fresh()));
+    for (const e of legacy.exercises) for (const k of ['color', 'setStep', 'quickSets', 'tracksTime']) delete e[k];
+    const migrated = T.migrate(legacy);
+    expect(migrated.exercises[3]).toMatchObject({ color: '#18c5e8', tracksTime: true, quickSets: [1, 2, 5] });
+  });
+
+  it('lets the routine change after the fact', () => {
+    const s = fresh();
+    const added = T.addExercise(s, { name: 'Plank', unit: 'sec', start: 30, step: 5 });
+    expect(T.activeList(s).at(-1)!.id).toBe(added.id);
+    T.moveExercise(s, added.id, -1);
+    expect(s.exercises.at(-2)!.id).toBe(added.id);
+    T.updateExercise(s, added.id, { name: 'Long plank', color: '#4d7cff', tracksTime: true });
+    expect(s.exercises.find((e) => e.id === added.id)).toMatchObject({ name: 'Long plank', color: '#4d7cff', tracksTime: true });
+    T.deleteExercise(s, added.id);
+    expect(s.exercises).toHaveLength(4);
+  });
+});

@@ -20,9 +20,23 @@
  * The store calls them on a copy, so a function that throws never half-applies.
  */
 
-import type { Cycle, EnrichedEntry, Exercise, ExerciseStats, GridCell, LogEntry, OnboardingRow, State, Streaks } from './types';
+import { PALETTE, TEMPLATE } from './config';
+import type { Cycle, EnrichedEntry, Exercise, ExerciseStats, GridCell, LogEntry, State, Streaks } from './types';
 
 const DAY_MS = 86400000;
+
+// ---------- exercise defaults ----------
+
+export const paletteColor = (index: number): string => (PALETTE[index % PALETTE.length] as { value: string }).value;
+
+/** Sensible set sizes for a unit, so a new exercise works without any extra setup. */
+export function exerciseDefaults(unit: string, start: number): { setStep: number; quickSets: number[]; tracksTime: boolean } {
+  const u = unit.trim().toLowerCase();
+  if (['km', 'mi', 'mile', 'miles'].includes(u)) return { setStep: 0.5, quickSets: [1, 2, 5], tracksTime: true };
+  if (u === 'reps' || u === 'rep') return { setStep: 5, quickSets: [10, 20], tracksTime: false };
+  const half = Math.max(1, Math.round(start / 2));
+  return { setStep: 1, quickSets: [...new Set([half, Math.max(1, Math.round(start))])], tracksTime: false };
+}
 
 // ---------- numbers and dates ----------
 
@@ -97,11 +111,21 @@ export function migrate(obj: any): State {
       throw new Error('Backup has a broken exercise entry.');
     }
     maxId = Math.max(maxId, e.id);
+    const name = String(e.name);
+    const unit = String(e.unit || 'reps');
+    const tpl = TEMPLATE.find((t) => t.name === name);
+    const cycleStart = Number(e.cycles[e.cycles.length - 1]?.start) || 1;
+    const def = exerciseDefaults(unit, cycleStart);
+    const quick = Array.isArray(e.quickSets) ? e.quickSets.map(Number).filter((n: number) => n > 0) : [];
     s.exercises.push({
       id: e.id,
-      name: String(e.name),
-      unit: String(e.unit || 'reps'),
+      name,
+      unit,
       active: e.active !== false,
+      color: typeof e.color === 'string' && /^#[0-9a-f]{6}$/i.test(e.color) ? e.color : (tpl?.color ?? paletteColor(s.exercises.length)),
+      setStep: Number(e.setStep) > 0 ? Number(e.setStep) : (tpl?.setStep ?? def.setStep),
+      quickSets: quick.length ? quick : (tpl?.quickSets ?? def.quickSets),
+      tracksTime: typeof e.tracksTime === 'boolean' ? e.tracksTime : (tpl?.tracksTime ?? def.tracksTime),
       lifetimeOffset: Number(e.lifetimeOffset) || 0,
       backlogOffset: Number(e.backlogOffset) || 0,
       cycles: e.cycles.map((c: any) => ({ n: Number(c.n), start: Number(c.start), step: Number(c.step), from: c.from || null })),
@@ -159,13 +183,13 @@ export function enrich(state: State): EnrichedEntry[] {
   const counts = new Map<string, number>(); // "exId:cycle" -> advancing sessions so far
   return sortedLog(state).map((entry) => {
     const ex = getEx(state, entry.exId);
-    if (!ex) return { ...entry, name: '(deleted)', unit: '', target: entry.actual, delta: 0 };
+    if (!ex) return { ...entry, name: '(deleted)', unit: '', color: paletteColor(0), target: entry.actual, delta: 0 };
     const key = `${entry.exId}:${entry.cycle}`;
     const done = counts.get(key) || 0;
     const cycle = cycleOf(ex, entry.cycle);
     const target = r(cycle.start + cycle.step * done);
     if (entry.advance !== false) counts.set(key, done + 1);
-    return { ...entry, name: ex.name, unit: ex.unit, target, delta: r(entry.actual - target) };
+    return { ...entry, name: ex.name, unit: ex.unit, color: ex.color, target, delta: r(entry.actual - target) };
   });
 }
 
@@ -354,21 +378,32 @@ export interface NewExercise {
   start: number | string;
   step?: number | string;
   afterId?: number | null;
+  color?: string;
+  setStep?: number;
+  quickSets?: number[];
+  tracksTime?: boolean;
 }
 
 export function addExercise(state: State, o: NewExercise): Exercise {
   const name = String(o.name || '').trim();
   if (!name) throw new Error('Give the exercise a name.');
+  const unit = String(o.unit || 'reps').trim() || 'reps';
+  const start = r(requireNumber(o.start, 'First target'));
+  const def = exerciseDefaults(unit, start);
   const ex: Exercise = {
     id: newId(state),
     name,
-    unit: String(o.unit || 'reps').trim() || 'reps',
+    unit,
     active: o.active !== false,
+    color: o.color ?? paletteColor(state.exercises.length),
+    setStep: o.setStep ?? def.setStep,
+    quickSets: o.quickSets?.length ? o.quickSets : def.quickSets,
+    tracksTime: o.tracksTime ?? def.tracksTime,
     lifetimeOffset: o.lifetime ? requireNumber(o.lifetime, 'Total') : 0,
     backlogOffset: o.backlog ? requireNumber(o.backlog, 'Backlog') : 0,
     cycles: [{
       n: 1,
-      start: r(requireNumber(o.start, 'First target')),
+      start,
       step: r(requireNumber(o.step === undefined ? 1 : o.step, 'Step')),
       from: todayISO(),
     }],
@@ -383,6 +418,8 @@ export interface ExercisePatch {
   name?: string;
   unit?: string;
   active?: boolean;
+  color?: string;
+  tracksTime?: boolean;
   lifetime?: number | string;
   backlog?: number | string;
 }
@@ -397,6 +434,8 @@ export function updateExercise(state: State, id: number, o: ExercisePatch): Exer
   }
   if (o.unit !== undefined) ex.unit = String(o.unit).trim() || 'reps';
   if (o.active !== undefined) ex.active = Boolean(o.active);
+  if (o.color !== undefined) ex.color = o.color;
+  if (o.tracksTime !== undefined) ex.tracksTime = Boolean(o.tracksTime);
   if (o.lifetime !== undefined) ex.lifetimeOffset = o.lifetime === '' ? 0 : requireNumber(o.lifetime, 'Total');
   if (o.backlog !== undefined) ex.backlogOffset = o.backlog === '' ? 0 : requireNumber(o.backlog, 'Backlog');
   return ex;
@@ -537,7 +576,7 @@ export function setStreakSeed(state: State, days: number | string, today: string
  */
 export function setupFromOnboarding(
   state: State,
-  { rows, firstRow, firstIndex = 0, streakDays, today }: { rows: OnboardingRow[]; firstRow?: OnboardingRow; firstIndex?: number; streakDays?: number | string; today?: string },
+  { rows, firstRow, firstIndex = 0, streakDays, today }: { rows: NewExercise[]; firstRow?: NewExercise; firstIndex?: number; streakDays?: number | string; today?: string },
 ): State {
   const chosen = rows.filter((x) => String(x.name || '').trim());
   if (!chosen.length) throw new Error('Add at least one exercise.');

@@ -36,7 +36,7 @@ Pushing to `master` redeploys on Vercel (framework preset: Vite, output `dist`).
 
 ## Changing things
 
-- Step size, colour or start value: edit `PLAN` in `config.ts`. Start values only affect the first-run screen.
+- Routines are data now: edit exercises in the app under Backup, Routine (name, unit, step, colour, order, pause). `TEMPLATE` in `config.ts` only feeds the first-run "four-exercise rotation" option and defaults for older saved data.
 - Rules (rotation, targets, streaks): `logic.ts`, then add a test in `logic.test.ts`.
 - New button or screen action: add a function to `actions` in `app.ts` and a `data-act` in the view.
 - Do not change `storageKey` or `snapshotKey` in `config.ts`: they match the data already on the phone.

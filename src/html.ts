@@ -1,10 +1,9 @@
 // Tiny HTML building blocks. Views compose these instead of repeating markup.
 // Form controls carry data-f="<name>" so dom.readForm can collect them without per-field ids.
-import { colorOf } from './config';
 import { esc, signed } from './format';
 
 /** Coloured dot that tags an exercise by name. */
-export const dot = (name: string): string => `<i class="d" style="--ex:${colorOf(name)}"></i>`;
+export const dot = (color: string): string => `<i class="d" style="--ex:${esc(color)}"></i>`;
 
 /** Green/orange pill for a surplus or deficit. */
 export function chip(n: number, unit?: string): string {

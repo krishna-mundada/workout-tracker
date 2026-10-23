@@ -8,7 +8,7 @@ import type { EnrichedEntry, Exercise, ExerciseStats, State, Streaks } from './t
 import type { Milestone } from './milestones';
 import type { SnapshotInfo } from './store';
 import type { SyncView } from './sync';
-import { PLAN, CONFIG, CLOUD, colorOf, quickSetsOf, tracksTime } from './config';
+import { CONFIG, CLOUD, PALETTE, TEMPLATE } from './config';
 
 const CONFIG_REMINDER_HOURS = CLOUD.reminderHours;
 const CONFIG_DEFAULT_HOUR = CLOUD.defaultReminderHour;
@@ -33,6 +33,9 @@ export interface UiState {
   range: Range;
   from: string;
   to: string;
+  /** First-run rows while they are being edited; null before a starting point is chosen. */
+  draft: DraftRow[] | null;
+  draftFirst: number;
 }
 
 export type Range = '30' | '90' | 'all' | 'custom';
@@ -58,36 +61,63 @@ export interface ViewCtx {
   snapshots: () => SnapshotInfo[];
 }
 
-const setStepOf = (ex: Exercise): number => PLAN.find((p) => p.name === ex.name)?.setStep ?? 1;
-const exStyle = (name: string): string => `--ex:${colorOf(name)}`;
-const exLabel = (name: string): string => dot(name) + esc(name);
+const exStyle = (color: string): string => `--ex:${color}`;
+const exLabel = (ex: { name: string; color: string }): string => dot(ex.color) + esc(ex.name);
 const quietButton = (label: string, act: string, data: Record<string, string | number>, aria?: string): string => button(label, act, { cls: '', data, aria });
 
 // ---------- first run ----------
 
-export function viewOnboarding(): string {
-  const steps = [...new Set(PLAN.map((p) => `+${fmt(p.step)} ${p.unit === 'reps' && p.step === 1 ? 'rep' : esc(p.unit)}`))].join(' or ');
-  const rows = PLAN.map(
-    (p, i) => `
-    <div class="ob-row">
+/** One exercise on the first-run screen. All strings: they are what the inputs hold. */
+export interface DraftRow {
+  name: string;
+  unit: string;
+  step: string;
+  start: string;
+  lifetime: string;
+  backlog: string;
+  color: string;
+}
+
+export const blankDraft = (index: number): DraftRow => ({ name: '', unit: 'reps', step: '1', start: '10', lifetime: '', backlog: '', color: T.paletteColor(index) });
+export const templateDraft = (): DraftRow[] =>
+  TEMPLATE.map((t) => ({ name: t.name, unit: t.unit, step: String(t.step), start: String(t.start), lifetime: '', backlog: '', color: t.color }));
+
+export function viewOnboarding(ui: UiState): string {
+  if (!ui.draft) {
+    return `<h1 style="margin:6px 0 4px">Welcome</h1>
+      <p class="muted">Pick a starting point. You can change every exercise later.</p>
+      ${card(`<h2>Four-exercise rotation</h2><p class="small muted">Push-ups, Squats, Crunches and a Run, each going up a little every time you do it.</p>${button('Use this', 'pickTemplate', { cls: 'primary' })}`)}
+      ${card(`<h2>My own routine</h2><p class="small muted">Name your exercises and how fast each one should progress.</p>${button('Build my own', 'pickBlank')}`)}`;
+  }
+  const rows = ui.draft
+    .map(
+      (d, i) => `
+    <div class="ob-row" data-id="${i}">
       <div class="row">
-        <b>${exLabel(p.name)}</b>
-        <label class="check" style="margin:0"><input type="radio" name="first" value="${i}"${i === 0 ? ' checked' : ''}>Up first</label>
+        <b>${dot(d.color)}Exercise ${i + 1}</b>
+        <label class="check" style="margin:0"><input type="radio" name="first" value="${i}"${i === ui.draftFirst ? ' checked' : ''}>Up first</label>
+      </div>
+      ${field('Name', textInput('name', { value: d.name, placeholder: 'e.g. Push-ups' }))}
+      <div class="two">
+        ${field('Unit', textInput('unit', { value: d.unit, placeholder: 'reps, km, min' }))}
+        ${field('Goes up by', textInput('step', { value: d.step, mode: 'decimal' }))}
       </div>
       <div class="two">
-        ${field(`Next target (${esc(p.unit)})`, textInput('target', { value: p.start, mode: 'decimal' }))}
-        ${field('Total so far', textInput('lifetime', { mode: 'decimal', placeholder: '0' }))}
+        ${field('Next target', textInput('target', { value: d.start, mode: 'decimal' }))}
+        ${field('Total so far', textInput('lifetime', { value: d.lifetime, mode: 'decimal', placeholder: '0' }))}
       </div>
-      ${field('Backlog so far (ahead +, behind -)', textInput('backlog', { placeholder: '0, or e.g. -6 if behind' }))}
+      ${field('Backlog so far (ahead +, behind -)', textInput('backlog', { value: d.backlog, placeholder: '0, or e.g. -6 if behind' }))}
+      ${ui.draft && ui.draft.length > 1 ? `<div style="margin-top:10px">${button('Remove', 'removeDraft', { cls: 'ghost danger', data: { i } })}</div>` : ''}
     </div>`,
-  ).join('');
+    )
+    .join('');
 
   return `<div id="obForm">
     <h1 style="margin:6px 0 4px">Set your starting point</h1>
-    <p class="muted">One time only. Enter where each exercise stands right now, and which one is next.
-      Targets go up by ${steps} each time you complete that exercise.</p>
+    <p class="muted">Enter where each exercise stands right now, and which one is up first. Each goes up by its own step every time you complete it.</p>
     ${card(rows)}
-    ${card(field('Current streak in days (counting up to yesterday)', textInput('streak', { mode: 'numeric', placeholder: '0' })))}
+    ${button('Add another exercise', 'addDraft')}
+    ${card(field('Current streak in days (counting up to yesterday)', textInput('streak', { mode: 'numeric', placeholder: '0' })), { cls: 'gap' })}
     ${button('Start tracking', 'start', { cls: 'primary' })}
   </div>`;
 }
@@ -124,11 +154,11 @@ export function viewToday(ctx: ViewCtx): string {
       ]),
     ),
     upcoming.length
-      ? card('<h2>Coming up</h2>' + listRows(upcoming.map((p) => [exLabel(p.ex.name), `<b class="num">${amount(p.target, p.ex.unit)}</b>`])))
+      ? card('<h2>Coming up</h2>' + listRows(upcoming.map((p) => [exLabel(p.ex), `<b class="num">${amount(p.target, p.ex.unit)}</b>`])))
       : '',
     card(
       '<h2>Backlog</h2><p class="muted small">Actual minus target, all time. Plus means you are ahead.</p>' +
-        listRows(active.map((e) => [exLabel(e.name), chip(T.exerciseStats(state, e, en).surplus, e.unit)])),
+        listRows(active.map((e) => [exLabel(e), chip(T.exerciseStats(state, e, en).surplus, e.unit)])),
     ),
   ].join('');
 }
@@ -163,7 +193,7 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date, canRest }:
        <div class="sets">${sets.map((n, i) => `<button class="set" data-act="removeSet" data-i="${i}" aria-label="remove set">${fmt(n)} &times;</button>`).join('')}</div>`
     : '';
 
-  const quick = [...new Set([...quickSetsOf(ex.name).filter((n) => n < remaining || !inProgress), ...(remaining > 0 && inProgress ? [remaining] : [])])];
+  const quick = [...new Set([...ex.quickSets.filter((n) => n < remaining || !inProgress), ...(remaining > 0 && inProgress ? [remaining] : [])])];
   const chips = remaining > 0 || !inProgress
     ? `<div class="quick">${quick.map((n) => button(`+${fmt(n)}`, 'quickSet', { cls: 'qs', data: { ex: ex.id, n } })).join('')}</div>`
     : '';
@@ -186,7 +216,7 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date, canRest }:
       ${chips}
       <div class="stepper">
         <button class="sq" data-act="dec" aria-label="less">-</button>
-        ${textInput('actual', { value: suggested, mode: 'decimal', extra: `data-step="${setStepOf(ex)}"` })}
+        ${textInput('actual', { value: suggested, mode: 'decimal', extra: `data-step="${ex.setStep}"` })}
         <button class="sq" data-act="inc" aria-label="more">+</button>
       </div>
       ${buttons}
@@ -195,12 +225,12 @@ function hero({ ex, stats, ui, today, doneToday, options, sets, date, canRest }:
         ${inProgress ? '' : field('Exercise', select('exId', exerciseOptions, ex.id))}
         ${field('Date', `<input type="date" data-f="date" value="${date}">`)}
         <label class="check"><input type="checkbox" data-f="hold">Hold target next time (do not add the increase)</label>
-        ${tracksTime(ex.name) ? field('Time (optional, like 28:30)', textInput('minutes', { placeholder: 'mm:ss' })) : ''}
+        ${ex.tracksTime ? field('Time (optional, like 28:30)', textInput('minutes', { placeholder: 'mm:ss' })) : ''}
         ${field('Note', textInput('note', { maxlength: 200 }))}
       </details>
       ${canRest ? button('Take a rest day', 'restDay', { cls: 'link' }) : ''}
     </div>`,
-    { cls: 'hero', style: exStyle(ex.name) },
+    { cls: 'hero', style: exStyle(ex.color) },
   );
 }
 
@@ -263,7 +293,7 @@ export function viewHistory({ en, ui }: ViewCtx): string {
 }
 
 const historyRow = (e: EnrichedEntry): string =>
-  `<button class="hist-row" style="${exStyle(e.name)}" data-act="editEntry" data-id="${e.id}">
+  `<button class="hist-row" style="${exStyle(e.color)}" data-act="editEntry" data-id="${e.id}">
     <span><b>${esc(e.name)}</b> <span class="muted num">${fmt(e.actual)} ${esc(e.unit)} of ${fmt(e.target)}</span>${
       e.advance === false ? ' <span class="muted small">(held)</span>' : '' +
       (e.sets ? ` <span class="muted small">(${e.sets.length} sets)</span>` : '') +
@@ -285,7 +315,7 @@ export function entryForm({ state, today }: Pick<ViewCtx, 'state' | 'today'>, en
     ${field('Date', `<input type="date" data-f="date" value="${isNew ? T.addDays(today, -1) : entry.date}">`)}
     ${field('Amount', textInput('actual', { value: isNew ? '' : entry.actual, mode: 'decimal' }))}
     <label class="check"><input type="checkbox" data-f="hold"${!isNew && entry.advance === false ? ' checked' : ''}>Held (did not advance the target)</label>
-    ${ex && tracksTime(ex.name) ? field('Time (optional, like 28:30)', textInput('minutes', { value: !isNew && entry.minutes ? durationLabel(entry.minutes) : '', placeholder: 'mm:ss' })) : ''}
+    ${ex?.tracksTime ? field('Time (optional, like 28:30)', textInput('minutes', { value: !isNew && entry.minutes ? durationLabel(entry.minutes) : '', placeholder: 'mm:ss' })) : ''}
     ${field('Note', textInput('note', { value: isNew ? '' : entry.note || '', maxlength: 200 }))}
     <div class="btns">
       ${isNew ? '' : button('Delete', 'delEntry', { cls: 'ghost danger', data: id })}
@@ -329,7 +359,7 @@ function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: st
   const x = T.exerciseStats(state, ex, en);
   const shown = x.entries.filter((e) => (!win.from || e.date >= win.from) && (!win.to || e.date <= win.to));
   const period = T.periodTotals(x.entries, ex.id, today);
-  const pace = tracksTime(ex.name) ? T.paceStats(x.entries) : null;
+  const pace = ex.tracksTime ? T.paceStats(x.entries) : null;
   const paceGrid = pace
     ? statGrid([
         { value: paceLabel(pace.avg, ex.unit), label: 'average pace' },
@@ -342,7 +372,7 @@ function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: st
       ? `<div class="chartbox">${chartSvg(shown, win)}</div><p class="muted small" style="margin:8px 0 0">Solid: what you did. Dashed: target.</p>`
       : '<p class="muted small">Not enough sessions in this range for a chart.</p>';
   return card(
-    `<div class="row"><h2 style="margin:0">${exLabel(ex.name)}</h2>${chip(x.surplus, ex.unit)}</div>
+    `<div class="row"><h2 style="margin:0">${exLabel(ex)}</h2>${chip(x.surplus, ex.unit)}</div>
      <div style="margin:14px 0">${statGrid([
        { value: fmt(x.total), label: `total ${esc(ex.unit)}` },
        { value: x.sessions, label: 'sessions' },
@@ -354,7 +384,7 @@ function exerciseCard(state: State, ex: Exercise, en: EnrichedEntry[], today: st
        { value: fmt(x.best), label: 'best session' },
      ])}</div>
      ${paceGrid ? `<div style="margin:0 0 14px">${paceGrid}</div>` : ''}${chart}`,
-    { cls: 'ex-card', style: exStyle(ex.name) },
+    { cls: 'ex-card', style: exStyle(ex.color) },
   );
 }
 
@@ -426,6 +456,7 @@ export function viewMore(ctx: ViewCtx): string {
   return [
     installCard(ctx.install),
     syncCard(ctx.sync, ctx.reminder),
+    routineCard(state),
     '<h2 style="font-size:1.3rem">Backup</h2>',
     '<p class="muted">Your data lives only on this device. Export a copy now and then, especially before clearing browser data or changing phones.</p>',
     card(`<p class="small muted">Last backup: ${last ? new Date(last).toLocaleString() : 'never'}</p>
@@ -456,7 +487,7 @@ function startingNumbersCard(state: State): string {
   const rows = state.exercises
     .map(
       (e) => `<div class="ob-row" data-id="${e.id}">
-        <b>${exLabel(e.name)} (${esc(e.unit)})</b>
+        <b>${exLabel(e)} (${esc(e.unit)})</b>
         <div class="two">
           ${field('Total before tracking', textInput('lifetime', { value: e.lifetimeOffset || '', placeholder: '0' }))}
           ${field('Backlog before tracking', textInput('backlog', { value: e.backlogOffset || '', placeholder: '0' }))}
@@ -502,6 +533,50 @@ function syncCard(sync: SyncView, reminder: ReminderInfo): string {
   return card(`${intro}<p class="small">Signed in as <b>${esc(sync.email ?? '')}</b></p><p class="small muted">${state}</p>
     <div class="two">${button('Sync now', 'syncNow', { cls: 'primary' })}${button('Sign out', 'signOut')}</div>
     <h3 style="margin:18px 0 6px;font-size:1rem">Daily reminder</h3>${reminders}`);
+}
+
+function routineCard(state: State): string {
+  const rows = state.exercises.map((e, i) => {
+    const step = T.currentCycle(e).step;
+    const left = `${exLabel(e)}<br><span class="small muted">+${fmt(step)} ${esc(e.unit)} per session${e.active ? '' : ', paused'}</span>`;
+    const right = `<span class="mini">${i > 0 ? button('Up', 'moveUp', { data: { id: e.id }, aria: 'move up' }) : ''}${
+      i < state.exercises.length - 1 ? button('Down', 'moveDown', { data: { id: e.id }, aria: 'move down' }) : ''
+    }${button('Edit', 'editExercise', { data: { id: e.id } })}</span>`;
+    return [left, right] as [string, string];
+  });
+  return card(`<h2>Routine</h2><p class="small muted">The rotation follows this order. Paused exercises are skipped.</p>${listRows(rows)}
+    <div style="margin-top:12px">${button('Add exercise', 'addExercise', { cls: 'primary' })}</div>`);
+}
+
+/** Add (no exercise given) or edit an exercise. */
+export function exerciseForm(state: State, ex?: Exercise): string {
+  const isNew = !ex;
+  const hasHistory = !!ex && state.log.some((l) => l.exId === ex.id);
+  const color = ex?.color ?? T.paletteColor(state.exercises.length);
+  const colorOptions = PALETTE.map((p) => ({ value: p.value, label: p.name }));
+  const target = ex ? T.currentTarget(state, ex) : 10;
+  const step = ex ? T.currentCycle(ex).step : 1;
+  const id: Record<string, number> = ex ? { id: ex.id } : {};
+  return `<h2>${isNew ? 'Add exercise' : 'Edit exercise'}</h2>
+    ${field('Name', textInput('name', { value: ex?.name ?? '', placeholder: 'e.g. Pull-ups' }))}
+    <div class="two">
+      ${field('Unit', textInput('unit', { value: ex?.unit ?? 'reps', placeholder: 'reps, km, min' }))}
+      ${field('Goes up by', textInput('step', { value: step, mode: 'decimal' }))}
+    </div>
+    ${field(isNew ? 'First target' : 'Next target', textInput('target', { value: target, mode: 'decimal' }))}
+    ${field('Colour', select('color', colorOptions, color))}
+    <label class="check"><input type="checkbox" data-f="time"${ex?.tracksTime ? ' checked' : ''}>Track time and pace</label>
+    ${
+      isNew
+        ? `<div class="two">${field('Total so far', textInput('lifetime', { mode: 'decimal', placeholder: '0' }))}${field('Backlog so far', textInput('backlog', { placeholder: '0' }))}</div>`
+        : `<label class="check"><input type="checkbox" data-f="active"${ex.active ? ' checked' : ''}>In the rotation</label>`
+    }
+    ${!isNew ? '<p class="small muted">Changing the target or the step applies from your next session. Past entries keep the targets they had.</p>' : ''}
+    <div class="btns">
+      ${ex && !hasHistory ? button('Delete', 'deleteExercise', { cls: 'ghost danger', data: id }) : ''}
+      ${button('Cancel', 'closeModal')}
+      ${button('Save', 'saveExercise', { cls: 'primary', data: id })}
+    </div>`;
 }
 
 function themeCard(theme: Theme): string {

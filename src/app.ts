@@ -312,9 +312,7 @@ const actions: Record<string, Action> = {
       openModal(celebrationView(cheers));
       return;
     }
-    const skips = store.state.log.filter((l) => l.skipFor === entry.id);
-    const moved = skips.map((l) => T.getEx(store.state, l.exId)?.name).filter(Boolean).join(', ');
-    toast(`Logged ${ex?.name ?? 'session'} ${fmt(entry.actual)}${unitLabel(ex?.unit ?? 'reps')}${moved ? `. ${moved} moved to backlog` : ''}`, {
+    toast(`Logged ${ex?.name ?? 'session'} ${fmt(entry.actual)}${unitLabel(ex?.unit ?? 'reps')}`, {
       label: 'Undo',
       run: () => store.mutate((s) => T.deleteEntry(s, entry.id), 'undoing a session'),
     });
@@ -485,12 +483,18 @@ window.addEventListener('appinstalled', () => {
 
 /** Close out a session left open from an earlier day so its shortfall lands in the backlog. */
 function settleDay(): void {
+  const today = T.todayISO();
   const pending = store.state.pending;
-  if (!pending || pending.date >= T.todayISO()) return;
-  const entry = store.mutate((s) => T.settleStale(s, T.todayISO()), 'closing an unfinished session');
-  if (!entry) return;
-  const done = T.enrich(store.state).find((e) => e.id === entry.id);
-  if (done) toast(`Closed ${done.name} from ${done.date} at ${fmt(done.actual)} of ${fmt(done.target)} (${done.delta > 0 ? '+' : ''}${fmt(done.delta)} to backlog).`);
+  if (pending && pending.date < today) {
+    const entry = store.mutate((s) => T.settleStale(s, today), 'closing an unfinished session');
+    const done = entry && T.enrich(store.state).find((e) => e.id === entry.id);
+    if (done) toast(`Closed ${done.name} from ${done.date} at ${fmt(done.actual)} of ${fmt(done.target)} (${done.delta > 0 ? '+' : ''}${fmt(done.delta)} to backlog).`);
+  }
+  if (store.state.settings.settledThrough === T.addDays(today, -1)) return;
+  const added = store.mutate((s) => T.settleDays(s, today), 'closing out earlier days');
+  if (!added.length) return;
+  const names = [...new Set(added.map((l) => T.getEx(store.state, l.exId)?.name))].join(', ');
+  toast(`${names} moved to backlog from earlier days.`);
 }
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') settleDay();

@@ -93,7 +93,7 @@ export const newState = (): State => ({
   version: 1,
   exercises: [],
   log: [],
-  settings: { nextId: 1, streakSeed: null, lastBackup: null, restDays: [] },
+  settings: { nextId: 1, streakSeed: null, lastBackup: null, restDays: [], settledThrough: null },
   pending: null,
 });
 
@@ -149,7 +149,8 @@ export function migrate(obj: any): State {
       ...(Array.isArray(l.sets) && l.sets.length > 1 ? { sets: l.sets.map(Number) } : {}),
       ...(Number(l.minutes) > 0 ? { minutes: Number(l.minutes) } : {}),
       ...(l.extra === true ? { extra: true } : {}),
-      ...(Number.isFinite(Number(l.skipFor)) && Number(l.skipFor) > 0 ? { skipFor: Number(l.skipFor) } : {}),
+      ...(l.auto === true ? { auto: true } : {}),
+      ...(Number(l.skipFor) > 0 ? { skipFor: Number(l.skipFor) } : {}),
     });
   }
 
@@ -157,6 +158,7 @@ export function migrate(obj: any): State {
   s.settings.nextId = Math.max(Number(st.nextId) || 1, maxId + 1);
   s.settings.lastBackup = st.lastBackup || null;
   s.settings.restDays = Array.isArray(st.restDays) ? [...new Set<string>(st.restDays.filter(isISO))].sort() : [];
+  s.settings.settledThrough = isISO(st.settledThrough) ? st.settledThrough : null;
   const seed = st.streakSeed;
   s.settings.streakSeed = seed && seed.days > 0 && isISO(seed.endDate) ? { days: Number(seed.days), endDate: seed.endDate } : null;
   const p = obj.pending;
@@ -175,8 +177,10 @@ export const currentCycle = (ex: Exercise): Cycle => ex.cycles[ex.cycles.length 
 const cycleOf = (ex: Exercise, n: number): Cycle => ex.cycles.find((c) => c.n === n) || currentCycle(ex);
 
 /** Log entries in chronological order (date, then insertion order). */
+/** Same-day order: an automatic zero sits just before the session it was passed over for. */
+const sortOrder = (l: LogEntry): number => (l.skipFor ? l.skipFor - 0.5 : l.id);
 export const sortedLog = (state: State): LogEntry[] =>
-  [...state.log].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id - b.id));
+  [...state.log].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : sortOrder(a) - sortOrder(b)));
 
 // ---------- derived data ----------
 
@@ -267,10 +271,10 @@ export function paceStats(entries: LogEntry[]): PaceStats | null {
   return { avg: minutes / distance, best: Math.min(...paces), last: paces[paces.length - 1] as number, timed: timed.length };
 }
 
-export function nextExercise(state: State): Exercise | null {
+export function nextExercise(state: State, from: LogEntry[] = sortedLog(state)): Exercise | null {
   const active = activeList(state);
   if (!active.length) return null;
-  const log = sortedLog(state).filter((l) => !l.extra); // extras never move the rotation
+  const log = from.filter((l) => !l.extra); // extras never move the rotation
   if (!log.length) return active[0];
 
   const lastId = log[log.length - 1].exId;
@@ -303,7 +307,7 @@ export function rotationPreview(state: State, count: number): { ex: Exercise; ta
 
 /** Set of 'YYYY-MM-DD' days with any activity, including days covered by the setup streak. */
 function trainedDates(state: State): Set<string> {
-  const set = new Set<string>(state.log.map((l) => l.date));
+  const set = new Set<string>(state.log.filter((l) => !l.auto).map((l) => l.date));
   const seed = state.settings.streakSeed;
   if (seed && seed.days > 0) for (let i = 0; i < seed.days; i++) set.add(addDays(seed.endDate, -i));
   for (const d of state.settings.restDays) set.add(d);
@@ -344,7 +348,7 @@ export function streaks(state: State, today: string): Streaks {
 export function activityGrid(state: State, today: string, weeks: number): GridCell[][] {
   const set = trainedDates(state);
   const counts = new Map<string, number>();
-  for (const l of state.log) counts.set(l.date, (counts.get(l.date) || 0) + 1);
+  for (const l of state.log) if (!l.auto) counts.set(l.date, (counts.get(l.date) || 0) + 1);
   const monday = (parseISO(today).getDay() + 6) % 7;
   const start = addDays(today, -monday - (weeks - 1) * 7);
   return Array.from({ length: weeks }, (_, w) =>
@@ -531,29 +535,58 @@ export function discardSets(state: State): void {
   state.pending = null;
 }
 
-/** Active exercises the rotation skips when `exId` is trained out of order (empty when it is simply next). */
-export function passedOver(state: State, exId: number): Exercise[] {
-  const next = nextExercise(state);
-  const active = activeList(state);
-  const from = next ? active.findIndex((e) => e.id === next.id) : -1;
-  const to = active.findIndex((e) => e.id === exId);
-  if (from < 0 || to < 0 || from === to || !sortedLog(state).some((l) => !l.extra)) return [];
-  const out: Exercise[] = [];
-  for (let i = from; i !== to; i = (i + 1) % active.length) out.push(active[i]);
-  return out;
+/** The exercise that was due but not done, when `entry` was trained instead (one session per day, so only that one is owed). */
+function passedOver(state: State, entry: LogEntry): Exercise[] {
+  const before = sortedLog(state).filter((l) => l !== entry && !l.extra && (l.date < entry.date || (l.date === entry.date && sortOrder(l) < sortOrder(entry))));
+  if (!before.length) return [];
+  const due = nextExercise(state, before);
+  return due && due.id !== entry.exId ? [due] : [];
+}
+
+/**
+ * Close out finished days. Nothing is logged until a day is over:
+ *  - a day with no session counts as a zero for the exercise that was due (unless it was a rest day);
+ *  - a day where another exercise was done instead gives zeros to the ones passed over.
+ * The rotation then moves on regardless, and the shortfall lands in the backlog. Returns the zero sessions added.
+ */
+export function settleDays(state: State, today: string): LogEntry[] {
+  const yesterday = addDays(today, -1);
+  const done = state.settings.settledThrough;
+  if (!done) {
+    state.settings.settledThrough = yesterday; // never rewrite history from before this rule existed
+    return [];
+  }
+  const added: LogEntry[] = [];
+  const first = sortedLog(state).find((l) => !l.extra && !l.auto)?.date;
+  if (first) {
+    for (let d = addDays(done, 1); d <= yesterday; d = addDays(d, 1)) {
+      const real = sortedLog(state).filter((l) => l.date === d && !l.extra && !l.auto);
+      if (real.length) {
+        for (const entry of real) {
+          for (const ex of passedOver(state, entry)) added.push(autoZero(state, ex, d, 'Skipped, moved to backlog', entry.id));
+        }
+      } else if (d > first && !isRestDay(state, d)) {
+        const due = nextExercise(state);
+        if (due) added.push(autoZero(state, due, d, 'No session, moved to backlog'));
+      }
+    }
+  }
+  state.settings.settledThrough = yesterday;
+  return added;
+}
+
+function autoZero(state: State, ex: Exercise, date: string, note: string, skipFor?: number): LogEntry {
+  const entry = logSession(state, { exId: ex.id, actual: 0, date, note });
+  entry.auto = true;
+  if (skipFor !== undefined) entry.skipFor = skipFor;
+  return entry;
 }
 
 /** Turn the sets in progress into one logged session (the sum of the sets). */
 export function finishSession(state: State, { date, advance, note, minutes }: { date?: string; advance?: boolean; note?: string; minutes?: number | string } = {}): LogEntry {
   const p = state.pending;
   if (!p) throw new Error('No sets to finish.');
-  const day = date || p.date;
-  const skipped = passedOver(state, p.exId);
-  // Exercises passed over in the rotation count as a zero session: their target moves on and lands in the backlog.
-  // They are logged first so the session itself stays last and the rotation carries on after it.
-  const skips = skipped.map((ex) => logSession(state, { exId: ex.id, actual: 0, date: day, note: 'Skipped, moved to backlog' }));
-  const entry = logSession(state, { exId: p.exId, actual: pendingTotal(state), date: day, advance, note, minutes });
-  for (const skip of skips) skip.skipFor = entry.id;
+  const entry = logSession(state, { exId: p.exId, actual: pendingTotal(state), date: date || p.date, advance, note, minutes });
   if (p.sets.length > 1) entry.sets = [...p.sets];
   state.pending = null;
   return entry;

@@ -42,6 +42,8 @@ export interface LogEntry {
   extra?: boolean;
   /** Set on an automatic zero session: the id of the session that skipped past this exercise. */
   skipFor?: number;
+  /** Added automatically at the end of a day as a zero session. Does not count as a trained day. */
+  auto?: boolean;
 }
 
 export interface Settings {
@@ -50,6 +52,8 @@ export interface Settings {
   lastBackup: number | null;
   /** Days marked as rest: they keep the streak alive without a session. */
   restDays: string[];
+  /** Days up to and including this one have been closed out (missed or skipped exercises logged as zero). */
+  settledThrough: string | null;
 }
 
 /** A session being built up set by set. It becomes a log entry when finished. */

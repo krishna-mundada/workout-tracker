@@ -334,54 +334,68 @@ describe('extra work and day rollover', () => {
   });
 });
 
-describe('skipping the exercise that is up next', () => {
+describe('closing out days', () => {
   const byName = (s: State, n: string) => s.exercises.find((e) => e.name === n)!;
-  function doOutOfOrder(s: State, n: string, date: string, amount: number) {
-    const ex = byName(s, n);
-    T.addSet(s, { exId: ex.id, amount, date });
+  function done(s: State, n: string, date: string, amount: number) {
+    T.addSet(s, { exId: byName(s, n).id, amount, date });
     return T.finishSession(s);
   }
-
-  it('moves the skipped target to its backlog and continues the rotation after the exercise done', () => {
+  function started(): State {
     const s = fresh();
-    for (const d of ['2026-10-22', '2026-10-23', '2026-10-24']) logNext(s, d); // push, squats, crunches
-    expect(name(s)).toBe('Run');
-    const run = byName(s, 'Run');
-    const target = T.currentTarget(s, run);
-    doOutOfOrder(s, 'Squats', '2026-10-25', 21);
-    expect(name(s)).toBe('Crunches');
-    const stats = T.exerciseStats(s, run);
-    expect(stats.surplus).toBe(-target);
-    expect(T.currentTarget(s, run)).toBe(T.r(target + 0.1));
-  });
+    logNext(s, '2026-10-22'); // push-ups
+    logNext(s, '2026-10-23'); // squats
+    logNext(s, '2026-10-24'); // crunches
+    T.settleDays(s, '2026-10-25'); // initialise
+    return s;
+  }
 
-  it('skips several in order and leaves a plain in-order session alone', () => {
-    const s = fresh();
-    doOutOfOrder(s, 'Push-ups', '2026-10-22', 20);
-    const before = s.log.length;
-    doOutOfOrder(s, 'Squats', '2026-10-23', 20);
-    expect(s.log.length).toBe(before + 1);
-    doOutOfOrder(s, 'Run', '2026-10-24', 2); // skips Crunches
-    expect(s.log.filter((l) => l.skipFor).map((l) => byName(s, 'Crunches').id === l.exId)).toEqual([true]);
-    expect(name(s)).toBe('Push-ups');
-  });
-
-  it('removes the automatic skips when the session is deleted, and ignores extras and past entries', () => {
+  it('does nothing on the same day and never rewrites old history on first run', () => {
     const s = fresh();
     logNext(s, '2026-10-22');
-    const entry = doOutOfOrder(s, 'Crunches', '2026-10-23', 20); // skips Squats
-    expect(s.log.some((l) => l.skipFor === entry.id)).toBe(true);
-    T.deleteEntry(s, entry.id);
-    expect(s.log.some((l) => l.skipFor)).toBe(false);
-    T.logExtra(s, { exId: byName(s, 'Run').id, actual: 1, date: '2026-10-23' });
-    T.logSession(s, { exId: byName(s, 'Run').id, actual: 2, date: '2026-10-20' });
-    expect(s.log.some((l) => l.skipFor)).toBe(false);
+    expect(T.settleDays(s, '2026-10-30')).toEqual([]);
+    expect(s.settings.settledThrough).toBe('2026-10-29');
+    done(s, 'Crunches', '2026-10-30', 20); // skips Squats today
+    expect(T.settleDays(s, '2026-10-30')).toEqual([]);
+    expect(name(s)).toBe('Run');
+  });
+
+  it('moves a skipped exercise to backlog only once the day is over', () => {
+    const s = started();
+    const run = byName(s, 'Run');
+    const target = T.currentTarget(s, run);
+    done(s, 'Squats', '2026-10-25', 21); // Run was due
+    expect(T.settleDays(s, '2026-10-25')).toEqual([]);
+    expect(T.exerciseStats(s, run).surplus).toBe(0);
+    const added = T.settleDays(s, '2026-10-26');
+    expect(added.length).toBe(1);
+    expect(T.exerciseStats(s, run).surplus).toBe(-target);
+    expect(T.currentTarget(s, run)).toBe(T.r(target + 0.1));
+    expect(name(s)).toBe('Crunches');
+  });
+
+  it('logs a zero for the due exercise on an idle day and moves on', () => {
+    const s = started();
+    const run = byName(s, 'Run');
+    const target = T.currentTarget(s, run);
+    T.settleDays(s, '2026-10-26'); // Oct 25 idle: Run zero
+    expect(T.exerciseStats(s, run).surplus).toBe(-target);
+    expect(name(s)).toBe('Push-ups');
+    expect(T.streaks(s, '2026-10-26').current).toBe(0);
+  });
+
+  it('skips rest days, ignores extras, and is idempotent', () => {
+    const s = started();
+    T.markRest(s, '2026-10-25');
+    T.logExtra(s, { exId: byName(s, 'Run').id, actual: 1, date: '2026-10-26' });
+    expect(T.settleDays(s, '2026-10-27').length).toBe(1); // only Oct 26 (extras do not count as a session)
+    expect(T.settleDays(s, '2026-10-27')).toEqual([]);
   });
 
   it('survives a migrate round trip', () => {
-    const s = fresh();
-    logNext(s, '2026-10-22');
-    doOutOfOrder(s, 'Crunches', '2026-10-23', 20);
-    expect(T.migrate(JSON.parse(JSON.stringify(s)))!.log.filter((l) => l.skipFor).length).toBe(1);
+    const s = started();
+    T.settleDays(s, '2026-10-27');
+    const m = T.migrate(JSON.parse(JSON.stringify(s)))!;
+    expect(m.log.filter((l) => l.auto).length).toBe(2);
+    expect(m.settings.settledThrough).toBe('2026-10-26');
   });
 });

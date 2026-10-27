@@ -40,6 +40,8 @@ export interface LogEntry {
   minutes?: number;
   /** Extra work outside the rotation (catching up on a backlog). Counts toward totals and backlog only. */
   extra?: boolean;
+  /** Set on an automatic zero session: the id of the session that skipped past this exercise. */
+  skipFor?: number;
 }
 
 export interface Settings {

@@ -312,7 +312,9 @@ const actions: Record<string, Action> = {
       openModal(celebrationView(cheers));
       return;
     }
-    toast(`Logged ${ex?.name ?? 'session'} ${fmt(entry.actual)}${unitLabel(ex?.unit ?? 'reps')}`, {
+    const skips = store.state.log.filter((l) => l.skipFor === entry.id);
+    const moved = skips.map((l) => T.getEx(store.state, l.exId)?.name).filter(Boolean).join(', ');
+    toast(`Logged ${ex?.name ?? 'session'} ${fmt(entry.actual)}${unitLabel(ex?.unit ?? 'reps')}${moved ? `. ${moved} moved to backlog` : ''}`, {
       label: 'Undo',
       run: () => store.mutate((s) => T.deleteEntry(s, entry.id), 'undoing a session'),
     });

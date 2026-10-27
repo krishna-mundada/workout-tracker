@@ -149,6 +149,7 @@ export function migrate(obj: any): State {
       ...(Array.isArray(l.sets) && l.sets.length > 1 ? { sets: l.sets.map(Number) } : {}),
       ...(Number(l.minutes) > 0 ? { minutes: Number(l.minutes) } : {}),
       ...(l.extra === true ? { extra: true } : {}),
+      ...(Number.isFinite(Number(l.skipFor)) && Number(l.skipFor) > 0 ? { skipFor: Number(l.skipFor) } : {}),
     });
   }
 
@@ -530,11 +531,29 @@ export function discardSets(state: State): void {
   state.pending = null;
 }
 
+/** Active exercises the rotation skips when `exId` is trained out of order (empty when it is simply next). */
+export function passedOver(state: State, exId: number): Exercise[] {
+  const next = nextExercise(state);
+  const active = activeList(state);
+  const from = next ? active.findIndex((e) => e.id === next.id) : -1;
+  const to = active.findIndex((e) => e.id === exId);
+  if (from < 0 || to < 0 || from === to || !sortedLog(state).some((l) => !l.extra)) return [];
+  const out: Exercise[] = [];
+  for (let i = from; i !== to; i = (i + 1) % active.length) out.push(active[i]);
+  return out;
+}
+
 /** Turn the sets in progress into one logged session (the sum of the sets). */
 export function finishSession(state: State, { date, advance, note, minutes }: { date?: string; advance?: boolean; note?: string; minutes?: number | string } = {}): LogEntry {
   const p = state.pending;
   if (!p) throw new Error('No sets to finish.');
-  const entry = logSession(state, { exId: p.exId, actual: pendingTotal(state), date: date || p.date, advance, note, minutes });
+  const day = date || p.date;
+  const skipped = passedOver(state, p.exId);
+  // Exercises passed over in the rotation count as a zero session: their target moves on and lands in the backlog.
+  // They are logged first so the session itself stays last and the rotation carries on after it.
+  const skips = skipped.map((ex) => logSession(state, { exId: ex.id, actual: 0, date: day, note: 'Skipped, moved to backlog' }));
+  const entry = logSession(state, { exId: p.exId, actual: pendingTotal(state), date: day, advance, note, minutes });
+  for (const skip of skips) skip.skipFor = entry.id;
   if (p.sets.length > 1) entry.sets = [...p.sets];
   state.pending = null;
   return entry;
@@ -578,7 +597,7 @@ export function editEntry(state: State, id: number, patch: Partial<Pick<SessionI
 }
 
 export function deleteEntry(state: State, id: number): void {
-  state.log = state.log.filter((l) => l.id !== id);
+  state.log = state.log.filter((l) => l.id !== id && l.skipFor !== id);
 }
 
 /** Record a streak you already had before using the app: `days` days ending yesterday. */

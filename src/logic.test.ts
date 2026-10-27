@@ -333,3 +333,55 @@ describe('extra work and day rollover', () => {
     expect(name(s)).toBe('Squats');
   });
 });
+
+describe('skipping the exercise that is up next', () => {
+  const byName = (s: State, n: string) => s.exercises.find((e) => e.name === n)!;
+  function doOutOfOrder(s: State, n: string, date: string, amount: number) {
+    const ex = byName(s, n);
+    T.addSet(s, { exId: ex.id, amount, date });
+    return T.finishSession(s);
+  }
+
+  it('moves the skipped target to its backlog and continues the rotation after the exercise done', () => {
+    const s = fresh();
+    for (const d of ['2026-10-22', '2026-10-23', '2026-10-24']) logNext(s, d); // push, squats, crunches
+    expect(name(s)).toBe('Run');
+    const run = byName(s, 'Run');
+    const target = T.currentTarget(s, run);
+    doOutOfOrder(s, 'Squats', '2026-10-25', 21);
+    expect(name(s)).toBe('Crunches');
+    const stats = T.exerciseStats(s, run);
+    expect(stats.surplus).toBe(-target);
+    expect(T.currentTarget(s, run)).toBe(T.r(target + 0.1));
+  });
+
+  it('skips several in order and leaves a plain in-order session alone', () => {
+    const s = fresh();
+    doOutOfOrder(s, 'Push-ups', '2026-10-22', 20);
+    const before = s.log.length;
+    doOutOfOrder(s, 'Squats', '2026-10-23', 20);
+    expect(s.log.length).toBe(before + 1);
+    doOutOfOrder(s, 'Run', '2026-10-24', 2); // skips Crunches
+    expect(s.log.filter((l) => l.skipFor).map((l) => byName(s, 'Crunches').id === l.exId)).toEqual([true]);
+    expect(name(s)).toBe('Push-ups');
+  });
+
+  it('removes the automatic skips when the session is deleted, and ignores extras and past entries', () => {
+    const s = fresh();
+    logNext(s, '2026-10-22');
+    const entry = doOutOfOrder(s, 'Crunches', '2026-10-23', 20); // skips Squats
+    expect(s.log.some((l) => l.skipFor === entry.id)).toBe(true);
+    T.deleteEntry(s, entry.id);
+    expect(s.log.some((l) => l.skipFor)).toBe(false);
+    T.logExtra(s, { exId: byName(s, 'Run').id, actual: 1, date: '2026-10-23' });
+    T.logSession(s, { exId: byName(s, 'Run').id, actual: 2, date: '2026-10-20' });
+    expect(s.log.some((l) => l.skipFor)).toBe(false);
+  });
+
+  it('survives a migrate round trip', () => {
+    const s = fresh();
+    logNext(s, '2026-10-22');
+    doOutOfOrder(s, 'Crunches', '2026-10-23', 20);
+    expect(T.migrate(JSON.parse(JSON.stringify(s)))!.log.filter((l) => l.skipFor).length).toBe(1);
+  });
+});

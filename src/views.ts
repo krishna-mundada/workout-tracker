@@ -485,6 +485,7 @@ export function viewMore(ctx: ViewCtx): string {
         ${button('Paste text', 'importText')}
       </div>`),
     startingNumbersCard(state),
+    fixPastCard(),
     themeCard(ctx.theme),
     snapshotsCard(ctx.snapshots()),
     card(button('Erase everything', 'erase', { cls: 'ghost danger' })),
@@ -595,6 +596,13 @@ export function exerciseForm(state: State, ex?: Exercise): string {
       ${button('Cancel', 'closeModal')}
       ${button('Save', 'saveExercise', { cls: 'primary', data: id })}
     </div>`;
+}
+
+function fixPastCard(): string {
+  return card(`<h2>Fix past days</h2>
+    <p class="small muted">Days with no session, or where another exercise was done, become zeros for the exercise that was due, and the rotation moves on. Pick the first day to check from. Rest days are left alone. A snapshot is kept so you can undo.</p>
+    <div id="fixPast">${field('From', '<input type="date" data-f="from">')}</div>
+    <div style="margin-top:10px">${button('Apply', 'fixPast', { cls: 'primary' })}</div>`);
 }
 
 function themeCard(theme: Theme): string {

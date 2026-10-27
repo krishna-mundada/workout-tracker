@@ -399,3 +399,16 @@ describe('closing out days', () => {
     expect(m.settings.settledThrough).toBe('2026-10-26');
   });
 });
+
+describe('fix past days', () => {
+  it('rebuilds zeros from a chosen day and is repeatable', () => {
+    const s = fresh();
+    logNext(s, '2026-10-22');
+    T.resettleFrom(s, '2026-10-23', '2026-10-26');
+    const n = s.log.filter((l) => l.auto).length;
+    expect(n).toBe(3);
+    T.resettleFrom(s, '2026-10-23', '2026-10-26');
+    expect(s.log.filter((l) => l.auto).length).toBe(n);
+    expect(name(s)).toBe('Push-ups');
+  });
+});

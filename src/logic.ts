@@ -575,6 +575,14 @@ export function settleDays(state: State, today: string): LogEntry[] {
   return added;
 }
 
+/** Re-run the day close-out from `from`: earlier automatic zeros from that day on are dropped and rebuilt. */
+export function resettleFrom(state: State, from: string, today: string): LogEntry[] {
+  if (!isISO(from) || from >= today) throw new Error('Pick a day before today.');
+  state.log = state.log.filter((l) => !(l.auto && l.date >= from));
+  state.settings.settledThrough = addDays(from, -1);
+  return settleDays(state, today);
+}
+
 function autoZero(state: State, ex: Exercise, date: string, note: string, skipFor?: number): LogEntry {
   const entry = logSession(state, { exId: ex.id, actual: 0, date, note });
   entry.auto = true;

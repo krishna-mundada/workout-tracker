@@ -420,6 +420,11 @@ const actions: Record<string, Action> = {
     store.restoreSnapshot(Number(el.dataset.i));
     toast('Snapshot restored.');
   },
+  fixPast: () => {
+    const from = text(readForm(must('#fixPast')), 'from');
+    const added = store.mutate((s) => T.resettleFrom(s, from, T.todayISO()), 'fixing past days');
+    toast(added.length ? `Added ${added.length} zero session${added.length > 1 ? 's' : ''} to backlog. Next up: ${T.nextExercise(store.state)?.name ?? 'none'}.` : 'Nothing to change.');
+  },
   erase: () => {
     if (!confirmed('Erase all data on this device?')) return;
     if (!confirmed('Really erase everything? A snapshot is kept in Backup > Automatic snapshots until you clear browser data.')) return;
